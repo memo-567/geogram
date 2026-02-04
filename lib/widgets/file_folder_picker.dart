@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 
 import '../models/file_browser_cache_models.dart';
@@ -77,12 +78,31 @@ class FileFolderPicker extends StatefulWidget {
   final bool allowMultiSelect;
   final bool showHiddenFiles;
 
+  /// When provided, tapping a file calls this instead of toggling selection.
+  /// Used for explorer mode where files are opened directly.
+  final ValueChanged<String>? onFileOpen;
+
+  /// When true, hides the selection toolbar and confirm button.
+  /// Files are opened via [onFileOpen] instead of selected.
+  final bool explorerMode;
+
+  /// Additional storage location shortcuts (e.g. Geogram profile folder).
+  final List<StorageLocation>? extraLocations;
+
+  /// Called when internal toolbar state changes (view mode, sort, etc.)
+  /// so the parent can rebuild its AppBar actions.
+  final VoidCallback? onStateChanged;
+
   const FileFolderPicker({
     super.key,
     this.initialDirectory,
     this.title = 'Select files or folders',
     this.allowMultiSelect = true,
     this.showHiddenFiles = false,
+    this.onFileOpen,
+    this.explorerMode = false,
+    this.extraLocations,
+    this.onStateChanged,
   });
 
   /// Show the picker as a full-screen dialog
@@ -106,10 +126,10 @@ class FileFolderPicker extends StatefulWidget {
   }
 
   @override
-  State<FileFolderPicker> createState() => _FileFolderPickerState();
+  State<FileFolderPicker> createState() => FileFolderPickerState();
 }
 
-class _FileFolderPickerState extends State<FileFolderPicker> {
+class FileFolderPickerState extends State<FileFolderPicker> {
   late Directory _currentDirectory;
   List<FileSystemItem> _items = [];
   final Set<String> _selectedPaths = {};
@@ -118,6 +138,20 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
   FileSortMode _sortMode = FileSortMode.name;
   bool _sortAscending = true;
   List<StorageLocation> _storageLocations = [];
+
+  int get _bestStorageMatch {
+    int bestIndex = -1;
+    int bestLength = -1;
+    for (int i = 0; i < _storageLocations.length; i++) {
+      final loc = _storageLocations[i];
+      if (_currentDirectory.path.startsWith(loc.path) &&
+          loc.path.length > bestLength) {
+        bestLength = loc.path.length;
+        bestIndex = i;
+      }
+    }
+    return bestIndex;
+  }
   final Map<String, int> _folderSizeCache = {};  // In-memory cache for current session
   final Set<String> _calculatingFolders = {};
   final Map<String, String?> _thumbnailCache = {};  // path -> thumbnail path
@@ -126,6 +160,7 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
   bool _isGridView = false;
   final FileBrowserCacheService _cacheService = FileBrowserCacheService();
   bool _cacheInitialized = false;
+  final FocusNode _keyboardFocusNode = FocusNode();
 
   @override
   void initState() {
@@ -134,6 +169,12 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
     _initializeCacheService();
     _initializeDirectory();
     _detectStorageLocations();
+  }
+
+  @override
+  void dispose() {
+    _keyboardFocusNode.dispose();
+    super.dispose();
   }
 
   Future<void> _initializeCacheService() async {
@@ -230,6 +271,11 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
       }
     }
 
+    // Add extra locations (e.g. Geogram profile folder)
+    if (widget.extraLocations != null) {
+      locations.insertAll(0, widget.extraLocations!);
+    }
+
     if (mounted) {
       setState(() => _storageLocations = locations);
     }
@@ -292,9 +338,12 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
                 .toList();
 
             // Populate in-memory folder size cache from persistent cache
+            // and trigger background calculation for folders with unknown size
             for (final entry in cachedDir.entries) {
               if (entry.isDirectory && entry.size > 0) {
                 _folderSizeCache[entry.path] = entry.size;
+              } else if (entry.isDirectory && (_folderSizeCache[entry.path] ?? 0) == 0) {
+                _calculateFolderSize(entry.path);
               }
             }
 
@@ -389,6 +438,7 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
   }
 
   Future<void> _calculateFolderSize(String folderPath) async {
+    if (_calculatingFolders.contains(folderPath)) return;
     _calculatingFolders.add(folderPath);
     if (mounted) setState(() {});
 
@@ -675,14 +725,68 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
     );
   }
 
+  /// Returns the action widgets (view toggle, hidden files, sort) so a parent
+  /// AppBar can include them directly. Used in explorer mode.
+  List<Widget> buildActions() {
+    final colorScheme = Theme.of(context).colorScheme;
+    return [
+      IconButton(
+        icon: Icon(_isGridView ? Icons.view_list_rounded : Icons.grid_view_rounded),
+        tooltip: _isGridView ? 'List view' : 'Grid view',
+        onPressed: () {
+          setState(() => _isGridView = !_isGridView);
+          widget.onStateChanged?.call();
+        },
+      ),
+      IconButton(
+        icon: Icon(
+          _showHidden ? Icons.visibility_rounded : Icons.visibility_off_rounded,
+          color: _showHidden ? colorScheme.primary : null,
+        ),
+        tooltip: _showHidden ? 'Hide hidden files' : 'Show hidden files',
+        onPressed: () {
+          setState(() => _showHidden = !_showHidden);
+          _loadDirectory();
+          widget.onStateChanged?.call();
+        },
+      ),
+      PopupMenuButton<FileSortMode>(
+        icon: const Icon(Icons.sort_rounded),
+        tooltip: 'Sort',
+        position: PopupMenuPosition.under,
+        onSelected: (mode) {
+          _changeSortMode(mode);
+          widget.onStateChanged?.call();
+        },
+        itemBuilder: (context) => [
+          _buildSortMenuItem(FileSortMode.name, 'Name', Icons.sort_by_alpha_rounded),
+          _buildSortMenuItem(FileSortMode.size, 'Size', Icons.data_usage_rounded),
+          _buildSortMenuItem(FileSortMode.modified, 'Date modified', Icons.schedule_rounded),
+        ],
+      ),
+      const SizedBox(width: 4),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
-    return Scaffold(
+    return Focus(
+      focusNode: _keyboardFocusNode,
+      autofocus: true,
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent &&
+            event.logicalKey == LogicalKeyboardKey.backspace) {
+          _navigateUp();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: Scaffold(
       backgroundColor: colorScheme.surface,
-      appBar: AppBar(
+      appBar: widget.explorerMode ? null : AppBar(
         elevation: 0,
         scrolledUnderElevation: 1,
         backgroundColor: colorScheme.surface,
@@ -692,58 +796,13 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
           onPressed: _cancel,
           tooltip: 'Cancel',
         ),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              widget.title,
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            Text(
-              _currentDirectory.path,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
+        title: Text(
+          widget.title,
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
         ),
-        actions: [
-          // View toggle
-          IconButton(
-            icon: Icon(_isGridView ? Icons.view_list_rounded : Icons.grid_view_rounded),
-            tooltip: _isGridView ? 'List view' : 'Grid view',
-            onPressed: () => setState(() => _isGridView = !_isGridView),
-          ),
-          // Hidden files toggle
-          IconButton(
-            icon: Icon(
-              _showHidden ? Icons.visibility_rounded : Icons.visibility_off_rounded,
-              color: _showHidden ? colorScheme.primary : null,
-            ),
-            tooltip: _showHidden ? 'Hide hidden files' : 'Show hidden files',
-            onPressed: () {
-              setState(() => _showHidden = !_showHidden);
-              _loadDirectory();
-            },
-          ),
-          // Sort menu
-          PopupMenuButton<FileSortMode>(
-            icon: const Icon(Icons.sort_rounded),
-            tooltip: 'Sort',
-            position: PopupMenuPosition.under,
-            onSelected: _changeSortMode,
-            itemBuilder: (context) => [
-              _buildSortMenuItem(FileSortMode.name, 'Name', Icons.sort_by_alpha_rounded),
-              _buildSortMenuItem(FileSortMode.size, 'Size', Icons.data_usage_rounded),
-              _buildSortMenuItem(FileSortMode.modified, 'Date modified', Icons.schedule_rounded),
-            ],
-          ),
-          const SizedBox(width: 4),
-        ],
+        actions: buildActions(),
       ),
       body: Column(
         children: [
@@ -769,10 +828,14 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
                             : _buildListView(theme),
           ),
 
-          // Selection bar
-          _buildSelectionBar(theme),
+          // Status bar
+          if (!_isLoading && _error == null) _buildStatusBar(theme),
+
+          // Selection bar (hidden in explorer mode)
+          if (!widget.explorerMode) _buildSelectionBar(theme),
         ],
       ),
+    ),
     );
   }
 
@@ -824,8 +887,7 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
         separatorBuilder: (_, __) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
           final location = _storageLocations[index];
-          final isCurrentRoot =
-              _currentDirectory.path.startsWith(location.path);
+          final isCurrentRoot = index == _bestStorageMatch;
 
           return Material(
             color: isCurrentRoot
@@ -874,36 +936,9 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       child: Row(
         children: [
-          // Up button
-          Material(
-            color: theme.colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(8),
-            child: InkWell(
-              onTap: _navigateUp,
-              borderRadius: BorderRadius.circular(8),
-              child: const Padding(
-                padding: EdgeInsets.all(8),
-                child: Icon(Icons.arrow_upward_rounded, size: 20),
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
           // Breadcrumb path
           Expanded(
             child: _buildBreadcrumb(theme),
-          ),
-          // Refresh button
-          Material(
-            color: theme.colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(8),
-            child: InkWell(
-              onTap: _loadDirectory,
-              borderRadius: BorderRadius.circular(8),
-              child: const Padding(
-                padding: EdgeInsets.all(8),
-                child: Icon(Icons.refresh_rounded, size: 20),
-              ),
-            ),
           ),
         ],
       ),
@@ -986,18 +1021,79 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
     );
   }
 
+  bool get _canNavigateUp =>
+      _currentDirectory.parent.path != _currentDirectory.path;
+
+  Widget _buildParentDirListItem(ThemeData theme) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: _navigateUp,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              _buildIconBox(Icons.folder_rounded, Colors.amber.shade700, 44),
+              const SizedBox(width: 12),
+              Text(
+                '..',
+                style: theme.textTheme.bodyLarge?.copyWith(
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildParentDirGridItem(ThemeData theme) {
+    return Material(
+      color: theme.colorScheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: _navigateUp,
+        borderRadius: BorderRadius.circular(12),
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildIconBox(Icons.folder_rounded, Colors.amber.shade700, 48),
+                const SizedBox(height: 6),
+                Text(
+                  '..',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildListView(ThemeData theme) {
+    final hasParent = _canNavigateUp;
     return ListView.builder(
       padding: const EdgeInsets.symmetric(vertical: 4),
-      itemCount: _items.length,
+      itemCount: _items.length + (hasParent ? 1 : 0),
       itemBuilder: (context, index) {
-        final item = _items[index];
+        if (hasParent && index == 0) {
+          return _buildParentDirListItem(theme);
+        }
+        final item = _items[hasParent ? index - 1 : index];
         return _buildListItem(item, theme);
       },
     );
   }
 
   Widget _buildGridView(ThemeData theme) {
+    final hasParent = _canNavigateUp;
     return GridView.builder(
       padding: const EdgeInsets.all(8),
       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
@@ -1006,9 +1102,12 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
         crossAxisSpacing: 8,
         childAspectRatio: 0.85,
       ),
-      itemCount: _items.length,
+      itemCount: _items.length + (hasParent ? 1 : 0),
       itemBuilder: (context, index) {
-        final item = _items[index];
+        if (hasParent && index == 0) {
+          return _buildParentDirGridItem(theme);
+        }
+        final item = _items[hasParent ? index - 1 : index];
         return _buildGridItem(item, theme);
       },
     );
@@ -1016,6 +1115,7 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
 
   Widget _buildListItem(FileSystemItem item, ThemeData theme) {
     final isSelected = _selectedPaths.contains(item.path);
+    final isExplorer = widget.explorerMode;
 
     return Material(
       color: isSelected
@@ -1025,17 +1125,19 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
         onTap: () {
           if (item.isDirectory) {
             _navigateTo(Directory(item.path));
+          } else if (isExplorer && widget.onFileOpen != null) {
+            widget.onFileOpen!(item.path);
           } else {
             _toggleSelection(item);
           }
         },
-        onLongPress: () => _toggleSelection(item),
+        onLongPress: isExplorer ? null : () => _toggleSelection(item),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           child: Row(
             children: [
-              // Checkbox/Radio
-              if (widget.allowMultiSelect)
+              // Checkbox/Radio (hidden in explorer mode)
+              if (!isExplorer && widget.allowMultiSelect)
                 Checkbox(
                   value: isSelected,
                   onChanged: (_) => _toggleSelection(item),
@@ -1043,13 +1145,13 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
                     borderRadius: BorderRadius.circular(4),
                   ),
                 )
-              else
+              else if (!isExplorer)
                 Radio<bool>(
                   value: true,
                   groupValue: isSelected,
                   onChanged: (_) => _toggleSelection(item),
                 ),
-              const SizedBox(width: 8),
+              if (!isExplorer) const SizedBox(width: 8),
               // Icon - use thumbnail method
               _buildItemThumbnail(item, theme, size: 44),
               const SizedBox(width: 12),
@@ -1111,6 +1213,17 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
   Widget _buildGridItem(FileSystemItem item, ThemeData theme) {
     final isSelected = _selectedPaths.contains(item.path);
     final hasThumbnail = _isImageFile(item.name) || _isVideoFile(item.name);
+    final isExplorer = widget.explorerMode;
+
+    void onItemTap() {
+      if (item.isDirectory) {
+        _navigateTo(Directory(item.path));
+      } else if (isExplorer && widget.onFileOpen != null) {
+        widget.onFileOpen!(item.path);
+      } else {
+        _toggleSelection(item);
+      }
+    }
 
     // For images/videos: full-bleed thumbnail with overlay filename
     if (hasThumbnail) {
@@ -1122,8 +1235,8 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
         borderRadius: BorderRadius.circular(12),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
-          onTap: () => _toggleSelection(item),
-          onLongPress: () => _toggleSelection(item),
+          onTap: onItemTap,
+          onLongPress: isExplorer ? null : () => _toggleSelection(item),
           borderRadius: BorderRadius.circular(12),
           child: Stack(
             fit: StackFit.expand,
@@ -1222,14 +1335,8 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
           : theme.colorScheme.surfaceContainerHighest,
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
-        onTap: () {
-          if (item.isDirectory) {
-            _navigateTo(Directory(item.path));
-          } else {
-            _toggleSelection(item);
-          }
-        },
-        onLongPress: () => _toggleSelection(item),
+        onTap: onItemTap,
+        onLongPress: isExplorer ? null : () => _toggleSelection(item),
         borderRadius: BorderRadius.circular(12),
         child: Stack(
           children: [
@@ -1361,6 +1468,40 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildStatusBar(ThemeData theme) {
+    final files = _items.where((item) => !item.isDirectory);
+    final fileCount = files.length;
+    final totalSize = files.fold<int>(0, (sum, item) => sum + item.size);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        border: Border(
+          top: BorderSide(color: theme.colorScheme.outlineVariant),
+        ),
+      ),
+      child: Row(
+        children: [
+          Text(
+            '$fileCount ${fileCount == 1 ? 'file' : 'files'}',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          if (totalSize > 0) ...[
+            const SizedBox(width: 16),
+            Text(
+              _formatBytes(totalSize),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -1687,7 +1828,7 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
   }
 
   String _formatBytes(int bytes) {
-    if (bytes <= 0) return '—';
+    if (bytes <= 0) return '';
     if (bytes < 1024) return '$bytes B';
     if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
     if (bytes < 1024 * 1024 * 1024) {
