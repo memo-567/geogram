@@ -684,6 +684,7 @@ class _TransferSendPageState extends State<TransferSendPage> {
       child: Padding(
         padding: const EdgeInsets.all(32),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(
