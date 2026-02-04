@@ -591,6 +591,7 @@ class _TransferSendPageState extends State<TransferSendPage> {
             const SizedBox(width: 10),
             Expanded(
               child: Column(
+                mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // Primary: nickname or callsign
