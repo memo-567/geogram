@@ -29,12 +29,12 @@ class SecurityService {
   static const bool _defaultDebugApiEnabled = false;
   static const bool _defaultHttpApiEnabled = true;
   static const bool _defaultBleOnlyMode = false;
-  static const double _defaultLocationGranularity = 25000.0; // 25 km default (middle of slider, city level)
+  static const double _defaultLocationGranularity = 50000.0; // 50 km default (middle of slider, region level)
 
   // Location granularity bounds
-  // Uses bilinear-log scale: 5m - 25km - 100km with 25km at slider center (0.5)
+  // Uses bilinear-log scale: 5m - 50km - 100km with 50km at slider center (0.5)
   static const double minGranularityMeters = 5.0;
-  static const double centerGranularityMeters = 25000.0; // 25 km at slider 0.5
+  static const double centerGranularityMeters = 50000.0; // 50 km at slider 0.5
   static const double maxGranularityMeters = 100000.0; // 100 km
 
   /// Check if debug API is enabled

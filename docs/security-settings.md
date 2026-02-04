@@ -64,11 +64,11 @@ SecurityService().debugApiEnabled = true;
 
 Controls how precisely location data is shared with other devices. This is a privacy feature that rounds coordinates to a configurable precision.
 
-- **Default**: `25000.0` (25 km) - city level, middle position on the slider
+- **Default**: `50000.0` (50 km) - region level, middle position on the slider
 - **Minimum**: `5.0` meters (very precise)
 - **Maximum**: `100000.0` meters (100 km, very private)
 
-The slider in the UI uses a bilinear-logarithmic scale with 25km at the center position (0.5). This ensures the default city-level privacy is exactly at the middle of the slider.
+The slider in the UI uses a bilinear-logarithmic scale with 50km at the center position (0.5). This ensures the default region-level privacy is exactly at the middle of the slider.
 
 **Privacy levels:**
 | Distance | Privacy Level | Description |
@@ -101,10 +101,10 @@ final (roundedLat, roundedLon) = SecurityService().applyLocationGranularity(
 
 // For slider UI (0.0 to 1.0)
 final sliderValue = SecurityService().locationGranularitySliderValue;
-SecurityService().locationGranularitySliderValue = 0.5; // Sets to exactly 25km (slider center)
+SecurityService().locationGranularitySliderValue = 0.5; // Sets to exactly 50km (slider center)
 
 // Get human-readable display
-final display = SecurityService().locationGranularityDisplay; // e.g., "25 km"
+final display = SecurityService().locationGranularityDisplay; // e.g., "50 km"
 final level = SecurityService().privacyLevelDescription; // e.g., "City level"
 ```
 
@@ -121,7 +121,7 @@ Example configuration:
   "security": {
     "httpApiEnabled": true,
     "debugApiEnabled": false,
-    "locationGranularityMeters": 25000.0
+    "locationGranularityMeters": 50000.0
   }
 }
 ```
@@ -194,5 +194,5 @@ SecurityService().settingsNotifier.addListener(() {
 | Constant | Value | Description |
 |----------|-------|-------------|
 | `minGranularityMeters` | 5.0 | Minimum granularity (most precise) |
-| `centerGranularityMeters` | 25000.0 | Center granularity at slider 0.5 (city level) |
+| `centerGranularityMeters` | 50000.0 | Center granularity at slider 0.5 (region level) |
 | `maxGranularityMeters` | 100000.0 | Maximum granularity (most private) |

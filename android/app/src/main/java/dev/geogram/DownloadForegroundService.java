@@ -82,10 +82,19 @@ public class DownloadForegroundService extends Service {
         } else {
             // START action or null - start the service
             Notification notification = createNotification();
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
-            } else {
-                startForeground(NOTIFICATION_ID, notification);
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+                } else {
+                    startForeground(NOTIFICATION_ID, notification);
+                }
+            } catch (Exception e) {
+                // Handle ForegroundServiceStartNotAllowedException on Android 14+
+                // when dataSync time limit is exhausted
+                Log.e(TAG, "Failed to start foreground service: " + e.getMessage());
+                // Stop the service gracefully instead of crashing
+                stopSelf();
+                return START_NOT_STICKY;
             }
         }
 

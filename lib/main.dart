@@ -604,20 +604,24 @@ void main() async {
 void _setupCrashHandlers() {
   // Handle Flutter framework errors (widget build errors, etc.)
   FlutterError.onError = (FlutterErrorDetails details) {
-    // Log the error
+    // Use details.toString() for full context (widget tree, render object info)
+    // instead of just exceptionAsString() which only gives the error message
+    final fullError = details.toString();
+
+    // Log the error with full context
     CrashService().logCrashSync(
       'FlutterError',
-      details.exceptionAsString(),
+      fullError,
       details.stack,
     );
 
     // Present error in debug mode
     FlutterError.presentError(details);
 
-    // For fatal errors, notify native for potential restart (with stack trace)
+    // For fatal errors, notify native for potential restart (with full context)
     if (details.silent != true) {
       CrashService().notifyNativeCrash(
-        details.exceptionAsString(),
+        fullError,
         stackTrace: details.stack,
       );
     }
