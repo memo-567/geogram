@@ -264,13 +264,13 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
         children: [
           // QR Code Preview
           Container(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.all(16),
             color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
             child: Center(
               child: RepaintBoundary(
                 key: _qrKey,
                 child: Container(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(16),
@@ -319,13 +319,13 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
     final content = _getContent();
     if (content.isEmpty) {
       return Container(
-        width: 200,
-        height: 200,
+        width: 140,
+        height: 140,
         color: Colors.white,
         child: Center(
           child: Text(
             _i18n.t('enter_content_to_preview'),
-            style: TextStyle(color: Colors.grey[400]),
+            style: TextStyle(color: Colors.grey[400], fontSize: 12),
             textAlign: TextAlign.center,
           ),
         ),
@@ -338,7 +338,7 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
       return QrImageView(
         data: content,
         version: QrVersions.auto,
-        size: 200,
+        size: 140,
         backgroundColor: Colors.white,
         errorCorrectionLevel: _getQrErrorLevel(),
       );
@@ -347,9 +347,9 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
     // For other formats, show a placeholder with content
     final is1D = _selectedFormat.is1D;
     return Container(
-      width: 200,
-      height: is1D ? 100 : 200,
-      padding: const EdgeInsets.all(8),
+      width: 140,
+      height: is1D ? 70 : 140,
+      padding: const EdgeInsets.all(6),
       color: Colors.white,
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -357,24 +357,26 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
         children: [
           Icon(
             _selectedFormat.is2D ? Icons.qr_code_2 : Icons.barcode_reader,
-            size: is1D ? 32 : 48,
+            size: is1D ? 24 : 36,
             color: Colors.grey,
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 2),
           Text(
             _selectedFormat.displayName,
-            style: TextStyle(color: Colors.grey, fontSize: is1D ? 11 : 14),
+            style: TextStyle(color: Colors.grey, fontSize: is1D ? 10 : 12),
           ),
-          const SizedBox(height: 2),
-          Flexible(
-            child: Text(
-              content.length > 30 ? '${content.substring(0, 27)}...' : content,
-              style: const TextStyle(fontSize: 10, color: Colors.grey),
-              textAlign: TextAlign.center,
-              overflow: TextOverflow.ellipsis,
-              maxLines: 2,
+          if (!is1D) ...[
+            const SizedBox(height: 2),
+            Flexible(
+              child: Text(
+                content.length > 20 ? '${content.substring(0, 17)}...' : content,
+                style: const TextStyle(fontSize: 9, color: Colors.grey),
+                textAlign: TextAlign.center,
+                overflow: TextOverflow.ellipsis,
+                maxLines: 2,
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );
@@ -406,6 +408,7 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
               hintText: _i18n.t('enter_text'),
               border: const OutlineInputBorder(),
             ),
+            textCapitalization: TextCapitalization.sentences,
             maxLines: 4,
             onChanged: (_) => setState(() {}),
           ),
