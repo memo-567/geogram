@@ -77,6 +77,10 @@ class DevicesService {
   /// How often to clean up offline discovered devices
   static const _cleanupInterval = Duration(hours: 2);
 
+  /// Throttle BLE-triggered LAN discovery to avoid spamming
+  DateTime? _lastBLETriggeredLANDiscovery;
+  static const _bleLanDiscoveryThrottle = Duration(seconds: 15);
+
   /// Cache of known devices with their status
   final Map<String, RemoteDevice> _devices = {};
 
@@ -434,6 +438,9 @@ class DevicesService {
       case DebugAction.encryptStorageEnable:
       case DebugAction.encryptStorageDisable:
         // Encrypted storage actions are handled directly by LogApiService
+        break;
+      case DebugAction.openExternalFile:
+        // External file viewer navigation is handled by main.dart
         break;
     }
   }
@@ -873,7 +880,7 @@ class DevicesService {
   }
 
   /// Handle BLE discovered devices
-  void _handleBLEDevices(List<BLEDevice> bleDevices) {
+  Future<void> _handleBLEDevices(List<BLEDevice> bleDevices) async {
     LogService().log('DevicesService: _handleBLEDevices called with ${bleDevices.length} devices');
     // BLE+ (Bluetooth Classic) disabled - use pure BLE
     // final pairingService = BluetoothClassicPairingService();
@@ -986,8 +993,16 @@ class DevicesService {
     ProximityDetectionService().triggerScan();
 
     // Trigger LAN discovery when BLE devices found (they're likely on same network)
+    // Throttled to avoid spamming - BLE scan results come in frequently
     if (bleDevices.isNotEmpty) {
-      _discoverLocalDevices(force: true);
+      final now = DateTime.now();
+      final lastDiscovery = _lastBLETriggeredLANDiscovery;
+      if (lastDiscovery == null ||
+          now.difference(lastDiscovery) > _bleLanDiscoveryThrottle) {
+        _lastBLETriggeredLANDiscovery = now;
+        // Fire and forget - don't block BLE handler on network discovery
+        _discoverLocalDevices(force: true);
+      }
     }
 
     _notifyListeners();
@@ -2321,11 +2336,12 @@ class DevicesService {
       'DevicesService: Checking ${localDevices.length} known local devices',
     );
 
-    for (final device in localDevices) {
-      if (device.url != null) {
-        await _checkDirectConnection(device);
-      }
-    }
+    // Run all reachability checks in parallel to avoid blocking UI
+    await Future.wait(
+      localDevices
+          .where((device) => device.url != null)
+          .map((device) => _checkDirectConnection(device).catchError((_) => false)),
+    );
 
     _notifyListeners();
   }

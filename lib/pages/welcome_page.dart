@@ -110,6 +110,9 @@ class _WelcomePageState extends State<WelcomePage> {
   ReceivePort? _vanityReceivePort;
   SendPort? _vanitySendPort;
 
+  // Lifecycle flag to prevent setState during dispose
+  bool _disposed = false;
+
   @override
   void initState() {
     super.initState();
@@ -119,6 +122,7 @@ class _WelcomePageState extends State<WelcomePage> {
 
   @override
   void dispose() {
+    _disposed = true;
     _stopVanityGenerator();
     _vanityPatternController.removeListener(_onVanityPatternChanged);
     _vanityPatternController.dispose();
@@ -299,7 +303,7 @@ class _WelcomePageState extends State<WelcomePage> {
     _vanityTimer = null;
     _vanityStopwatch?.stop();
 
-    if (mounted) {
+    if (mounted && !_disposed) {
       setState(() {});
     }
   }

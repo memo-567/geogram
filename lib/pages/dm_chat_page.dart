@@ -161,14 +161,18 @@ class _DMChatPageState extends State<DMChatPage> {
       // If device is online, try to flush any queued messages
       _tryFlushQueue();
     } catch (e) {
-      setState(() {
-        _error = 'Failed to initialize chat: $e';
-      });
+      if (mounted) {
+        setState(() {
+          _error = 'Failed to initialize chat: $e';
+        });
+      }
     }
 
-    setState(() {
-      _isLoading = false;
-    });
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
+    }
   }
 
   /// Try to flush queued messages if device is online
@@ -334,9 +338,11 @@ class _DMChatPageState extends State<DMChatPage> {
       }
       return;
     }
-    setState(() {
-      _isRecording = true;
-    });
+    if (mounted) {
+      setState(() {
+        _isRecording = true;
+      });
+    }
   }
 
   void _cancelRecording() {
