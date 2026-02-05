@@ -5,8 +5,10 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
+import 'package:permission_handler/permission_handler.dart';
 
 import '../models/file_browser_cache_models.dart';
+import '../pages/transfer_send_page.dart';
 import '../services/file_browser_cache_service.dart';
 import '../util/video_metadata_extractor.dart';
 
@@ -138,6 +140,7 @@ class FileFolderPickerState extends State<FileFolderPicker> {
   FileSortMode _sortMode = FileSortMode.name;
   bool _sortAscending = true;
   List<StorageLocation> _storageLocations = [];
+  late String _baseDirectory;
 
   int get _bestStorageMatch {
     int bestIndex = -1;
@@ -167,13 +170,23 @@ class FileFolderPickerState extends State<FileFolderPicker> {
   void initState() {
     super.initState();
     _showHidden = widget.showHiddenFiles;
-    _initializeCacheService();
-    _initializeDirectory();
+    // Initialize directory paths immediately to avoid late init errors
+    final initial = widget.initialDirectory ??
+        Platform.environment['HOME'] ??
+        (Platform.isAndroid ? '/storage/emulated/0' : '/');
+    _baseDirectory = initial;
+    _currentDirectory = Directory(initial);
+    // Wait for cache service before loading directory contents
+    _initializeCacheService().then((_) {
+      if (mounted) _loadDirectory();
+    });
     _detectStorageLocations();
   }
 
   @override
   void dispose() {
+    // Flush any pending cache writes before disposing
+    _cacheService.flush();
     _keyboardFocusNode.dispose();
     super.dispose();
   }
@@ -181,14 +194,6 @@ class FileFolderPickerState extends State<FileFolderPicker> {
   Future<void> _initializeCacheService() async {
     await _cacheService.initialize();
     _cacheInitialized = true;
-  }
-
-  void _initializeDirectory() {
-    final initial = widget.initialDirectory ??
-        Platform.environment['HOME'] ??
-        (Platform.isAndroid ? '/storage/emulated/0' : '/');
-    _currentDirectory = Directory(initial);
-    _loadDirectory();
   }
 
   Future<void> _detectStorageLocations() async {
@@ -316,7 +321,48 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     } catch (_) {}
   }
 
+  /// Check if a path is on Android external storage (not app-private folders)
+  /// Returns true for paths like /storage/emulated/0/DCIM, /storage/emulated/0/Pictures
+  /// Returns false for app-private paths like /storage/emulated/0/Android/data/dev.geogram
+  bool _isAndroidExternalStorage(String path) {
+    if (!Platform.isAndroid) return false;
+
+    // Check if it's on external storage
+    if (!path.startsWith('/storage/')) return false;
+
+    // App's private data folder doesn't need special permissions
+    if (path.contains('/Android/data/')) return false;
+    if (path.contains('/Android/obb/')) return false;
+
+    return true;
+  }
+
+  /// Request media permissions on Android
+  /// On Android 13+ (API 33), requests photos, videos, and audio permissions.
+  /// On older Android versions, requests storage permission.
+  Future<void> _requestAndroidMediaPermissions() async {
+    if (!Platform.isAndroid) return;
+
+    // Request all media permissions (Android 13+ uses granular permissions)
+    // On older Android, Permission.storage will be used as fallback
+    final permissions = [
+      Permission.photos,
+      Permission.videos,
+      Permission.audio,
+      Permission.storage, // Fallback for Android 12 and below
+    ];
+
+    // Request all permissions that aren't already granted
+    for (final permission in permissions) {
+      final status = await permission.status;
+      if (!status.isGranted && !status.isPermanentlyDenied) {
+        await permission.request();
+      }
+    }
+  }
+
   Future<void> _loadDirectory() async {
+    if (!mounted) return;
     setState(() {
       _isLoading = true;
       _error = null;
@@ -324,6 +370,12 @@ class FileFolderPickerState extends State<FileFolderPicker> {
 
     try {
       final dirPath = _currentDirectory.path;
+
+      // Request permissions when accessing Android external storage
+      // (not needed for app's private folders)
+      if (Platform.isAndroid && _isAndroidExternalStorage(dirPath)) {
+        await _requestAndroidMediaPermissions();
+      }
 
       // Try to load from persistent cache first
       if (_cacheInitialized) {
@@ -594,7 +646,10 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     if (_isImageFile(item.name)) {
       // Images use the file directly as thumbnail
       _thumbnailCache[item.path] = item.path;
-      if (mounted) setState(() {});
+      // Defer setState to avoid calling it during build
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() {});
+      });
     } else if (_isVideoFile(item.name)) {
       // Check persistent cache first
       if (_cacheInitialized) {
@@ -785,7 +840,7 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     final colorScheme = theme.colorScheme;
 
     return PopScope(
-      canPop: !_canNavigateUp,
+      canPop: _currentDirectory.path == _baseDirectory,
       onPopInvokedWithResult: (didPop, result) {
         if (!didPop && _canNavigateUp) {
           _navigateUp();
@@ -914,7 +969,10 @@ class FileFolderPickerState extends State<FileFolderPicker> {
                 : theme.colorScheme.surfaceContainerHighest,
             borderRadius: BorderRadius.circular(12),
             child: InkWell(
-              onTap: () => _navigateTo(Directory(location.path)),
+              onTap: () {
+                _baseDirectory = location.path;
+                _navigateTo(Directory(location.path));
+              },
               borderRadius: BorderRadius.circular(12),
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -1040,8 +1098,17 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     );
   }
 
-  bool get _canNavigateUp =>
-      _currentDirectory.parent.path != _currentDirectory.path;
+  bool get _canNavigateUp {
+    // At filesystem root
+    if (_currentDirectory.parent.path == _currentDirectory.path) {
+      return false;
+    }
+    // At starting folder - don't navigate above it
+    if (_currentDirectory.path == _baseDirectory) {
+      return false;
+    }
+    return true;
+  }
 
   Widget _buildParentDirListItem(ThemeData theme) {
     return Material(
@@ -1745,6 +1812,21 @@ class FileFolderPickerState extends State<FileFolderPicker> {
                 Clipboard.setData(ClipboardData(text: item.path));
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('Path copied to clipboard')),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.share_rounded),
+              title: const Text('Share...'),
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => TransferSendPage(
+                      initialPaths: [item.path],
+                    ),
+                  ),
                 );
               },
             ),

@@ -2211,6 +2211,7 @@ class DevicesService {
         );
       }
 
+      syncDeviceToConnectionManager(normalizedCallsign);
       _notifyListeners();
     } catch (e) {
       LogService().log('DevicesService: Error updating connected station: $e');
@@ -2316,6 +2317,13 @@ class DevicesService {
         LogService().log(
           'DevicesService: Added new ${result.type} from local network: $normalizedCallsign at $localUrl',
         );
+      }
+    }
+
+    // Sync discovered devices to ConnectionManager for LAN transport
+    for (final result in results) {
+      if (result.callsign != null) {
+        syncDeviceToConnectionManager(result.callsign!.toUpperCase());
       }
     }
 
@@ -2732,6 +2740,17 @@ class DevicesService {
   }) async {
     final normalizedCallsign = callsign.toUpperCase();
 
+    // Determine connection method from URL
+    String? connectionMethod;
+    if (url != null) {
+      try {
+        final uri = Uri.parse(url);
+        connectionMethod = _isPrivateIP(uri.host) ? 'wifi_local' : 'internet';
+      } catch (e) {
+        // Invalid URL, skip connection method
+      }
+    }
+
     if (!_devices.containsKey(normalizedCallsign)) {
       _devices[normalizedCallsign] = RemoteDevice(
         callsign: normalizedCallsign,
@@ -2741,6 +2760,7 @@ class DevicesService {
         isOnline: isOnline,
         hasCachedData: false,
         apps: [],
+        connectionMethods: connectionMethod != null ? [connectionMethod] : [],
       );
       _notifyListeners();
     } else {
@@ -2754,6 +2774,14 @@ class DevicesService {
       if (isOnline) {
         device.isOnline = true;
         device.lastSeen = DateTime.now();
+      }
+      // Add connection method if not already present
+      if (connectionMethod != null &&
+          !device.connectionMethods.contains(connectionMethod)) {
+        device.connectionMethods = [
+          ...device.connectionMethods,
+          connectionMethod,
+        ];
       }
       _notifyListeners();
     }
