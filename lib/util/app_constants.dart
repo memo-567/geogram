@@ -34,6 +34,7 @@ const List<String> knownAppTypesConst = [
   'usenet',
   'music',
   'stories',
+  'qr',
 ];
 
 /// App types that can only have a single instance per profile
@@ -68,6 +69,7 @@ const Set<String> singleInstanceTypesConst = {
   'music',
   'stories',
   'files',
+  'qr',
 };
 
 /// Predefined categories for stories

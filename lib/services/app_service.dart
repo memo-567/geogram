@@ -823,6 +823,7 @@ class AppService {
       if (entry.isDirectory) {
         final folderName = entry.name;
         if (folderName == 'files') continue; // already added above
+        if (folderName == 'logs') continue; // legacy system folder, skip
         final storagePath = _profileStorage!.getAbsolutePath(folderName);
         if (singleInstanceTypesConst.contains(folderName)) {
           results.add(_createMinimalApp(folderName, storagePath));
@@ -875,6 +876,7 @@ class AppService {
       if (entry.isDirectory) {
         final folderName = entry.name;
         if (folderName == 'files') continue; // already added above
+        if (folderName == 'logs') continue; // legacy system folder, skip
         try {
           if (singleInstanceTypesConst.contains(folderName)) {
             // Known single-instance type — skip app.js entirely
@@ -1768,6 +1770,10 @@ class AppService {
         // Initialize console app structure
         await _initializeConsoleApp(appFolder);
         stderr.writeln('Created console app skeleton');
+      } else if (type == 'qr') {
+        // Initialize QR codes app structure
+        await _initializeQrApp(appFolder);
+        stderr.writeln('Created qr app skeleton');
       }
       // Add more skeleton templates for other types here
     } catch (e) {
@@ -1838,6 +1844,9 @@ class AppService {
       } else if (type == 'console') {
         await _initializeConsoleAppWithStorage(folderName);
         stderr.writeln('Created console app skeleton');
+      } else if (type == 'qr') {
+        await _initializeQrAppWithStorage(folderName);
+        stderr.writeln('Created qr app skeleton');
       }
     } catch (e) {
       stderr.writeln('Error creating skeleton files: $e');
@@ -2481,6 +2490,26 @@ ${currentProfile.callsign}
     await _profileStorage!.writeJson('$folderName/extra/security.json', securityData);
 
     stderr.writeln('Console app initialized');
+  }
+
+  /// Initialize QR codes app structure
+  Future<void> _initializeQrApp(Directory appFolder) async {
+    // Create created and scanned directories
+    await Directory('${appFolder.path}/created').create();
+    await Directory('${appFolder.path}/scanned').create();
+
+    stderr.writeln('QR app initialized');
+  }
+
+  /// Initialize QR codes app using storage abstraction
+  Future<void> _initializeQrAppWithStorage(String folderName) async {
+    if (_profileStorage == null) return;
+
+    // Create created and scanned directories
+    await _profileStorage!.createDirectory('$folderName/created');
+    await _profileStorage!.createDirectory('$folderName/scanned');
+
+    stderr.writeln('QR app initialized');
   }
 
   /// Generate and save tree.json using storage abstraction

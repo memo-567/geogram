@@ -17,6 +17,7 @@ import 'services/log_api_service.dart';
 import 'version.dart';
 import 'services/debug_controller.dart';
 import 'services/usb_attachment_service.dart';
+import 'services/file_viewer_service.dart';
 import 'services/config_service.dart';
 import 'services/app_service.dart';
 import 'services/encrypted_storage_service.dart';
@@ -95,6 +96,8 @@ import 'pages/backup_browser_page.dart';
 import 'pages/video_browser_page.dart';
 import 'pages/transfer_page.dart';
 import 'pages/dm_chat_page.dart';
+import 'pages/photo_viewer_page.dart';
+import 'pages/document_viewer_editor_page.dart';
 import 'reader/pages/reader_home_page.dart';
 import 'flasher/pages/flasher_page.dart';
 import 'work/pages/work_page.dart';
@@ -102,6 +105,7 @@ import 'usenet/pages/usenet_app_page.dart';
 import 'music/pages/music_home_page.dart';
 import 'pages/files_browser_page.dart';
 import 'stories/pages/stories_home_page.dart';
+import 'pages/qr_browser_page.dart';
 import 'pages/profile_management_page.dart';
 import 'pages/create_app_page.dart';
 import 'pages/onboarding_page.dart';
@@ -214,7 +218,8 @@ void main() async {
     // Initialize storage configuration first (all other services depend on it)
     // Use custom data directory from CLI args if specified
     await StorageConfig().init(customBaseDir: AppArgs().dataDir);
-    await LogService().adoptStorageConfigLogsDir();
+    // Note: LogService file logging is deferred until profile is activated
+    // via LogService().switchToProfile() - logs are now per-profile
     await CrashService().reinitialize();
     LogService().log('StorageConfig initialized: ${StorageConfig().baseDir}');
 
@@ -316,6 +321,9 @@ void main() async {
       AppService().setNsec(profile.nsec);
     }
     await AppService().setActiveCallsign(profile.callsign);
+
+    // Switch logs to profile-specific directory
+    await LogService().switchToProfile(profile.callsign);
     LogService().log('AppService callsign set: ${profile.callsign}');
 
     // Ensure default apps exist for this profile (non-blocking)
@@ -334,6 +342,12 @@ void main() async {
     if (!kIsWeb && Platform.isAndroid) {
       UsbAttachmentService().initialize();
       LogService().log('UsbAttachmentService initialized');
+    }
+
+    // Initialize file viewer service (Android only, for external file viewing)
+    if (!kIsWeb && Platform.isAndroid) {
+      FileViewerService().initialize();
+      LogService().log('FileViewerService initialized');
     }
 
     // Initialize DM notification service (for push notifications on mobile)
@@ -1006,6 +1020,42 @@ class _HomePageState extends State<HomePage> {
       }
     } else if (event.action == DebugAction.openFlasherMonitor) {
       _handleOpenFlasherMonitor(event.params['device_path'] as String?);
+    } else if (event.action == DebugAction.openExternalFile) {
+      _handleOpenExternalFile(
+        event.params['path'] as String,
+        event.params['mimeType'] as String?,
+      );
+    }
+  }
+
+  /// Handle opening external file in appropriate viewer
+  void _handleOpenExternalFile(String path, String? mimeType) {
+    LogService().log('HomePage: Opening external file: $path ($mimeType)');
+
+    final ext = path.split('.').last.toLowerCase();
+    final isImage = {'jpg', 'jpeg', 'png'}.contains(ext);
+    final isVideo = {'mp4', 'avi', 'mkv', 'mov', 'wmv', 'flv', 'webm'}.contains(ext);
+    final isPdf = ext == 'pdf';
+
+    if (!mounted) return;
+
+    if (isImage || isVideo) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => PhotoViewerPage(imagePaths: [path]),
+        ),
+      );
+    } else if (isPdf) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => DocumentViewerEditorPage(
+            filePath: path,
+            viewerType: DocumentViewerType.pdf,
+          ),
+        ),
+      );
     }
   }
 
@@ -2534,6 +2584,14 @@ class _AppsPageState extends State<AppsPage> {
                                                     appEntry.title,
                                                 i18n: _i18n,
                                               )
+                                            : appEntry.type == 'qr'
+                                            ? QrBrowserPage(
+                                                appPath:
+                                                    appEntry.storagePath ??
+                                                        '',
+                                                appTitle:
+                                                    appEntry.title,
+                                              )
                                             : AppBrowserPage(
                                                 app: appEntry,
                                               );
@@ -2780,6 +2838,14 @@ class _AppsPageState extends State<AppsPage> {
                                                 appTitle:
                                                     appEntry.title,
                                                 i18n: _i18n,
+                                              )
+                                            : appEntry.type == 'qr'
+                                            ? QrBrowserPage(
+                                                appPath:
+                                                    appEntry.storagePath ??
+                                                        '',
+                                                appTitle:
+                                                    appEntry.title,
                                               )
                                             : AppBrowserPage(
                                                 app: appEntry,

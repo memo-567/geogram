@@ -130,6 +130,8 @@ This document catalogs reusable UI components available in the Geogram codebase.
 
 ### QR Widgets
 - [QrShareReceiveWidget](#qrsharereceivewidget) - Share/receive data via QR
+- [QrCodeService](#qrcodeservice) - Storage/CRUD for QR codes and barcodes
+- [QrCode Model](#qrcode-model) - QR code data model with format types
 
 ### Speech Input Widgets
 - [TranscribeButtonWidget](#transcribebuttonwidget) - Voice-to-text for text fields
@@ -2881,6 +2883,99 @@ Navigator.push(
 
 ---
 
+### QrCodeService
+
+**File:** `lib/services/qr_code_service.dart`
+
+Service for managing QR codes and barcodes storage. Supports both created and scanned codes with subfolder organization.
+
+**Key Methods:**
+| Method | Description |
+|--------|-------------|
+| `saveQrCode(QrCode code, {String? customName, String? subfolder})` | Save a QR code to storage |
+| `loadQrCodes({required QrCodeSource source, String? subfolder})` | Load codes from created or scanned folder |
+| `updateQrCode(QrCode code)` | Update existing code |
+| `deleteQrCode(String filePath)` | Delete a code |
+| `searchQrCodes(String query)` | Search by name, content, or tags |
+| `getSubfolders(QrCodeSource source)` | List user-created subfolders |
+| `createSubfolder(QrCodeSource source, String name)` | Create new subfolder |
+
+**Usage:**
+```dart
+final qrService = QrCodeService();
+
+// Set up storage (required before use)
+final profileStorage = AppService().profileStorage;
+final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+  profileStorage,
+  appPath,
+);
+qrService.setStorage(scopedStorage);
+await qrService.initializeApp(appPath);
+
+// Save a scanned code
+final code = QrCode(
+  name: 'WiFi: MyNetwork',
+  format: QrFormat.qrStandard,
+  content: 'WIFI:T:WPA;S:MyNetwork;P:password;;',
+  source: QrCodeSource.scanned,
+  image: 'data:image/png;base64,...',
+);
+final saved = await qrService.saveQrCode(code, subfolder: 'wifi');
+
+// Load all scanned codes
+final scannedCodes = await qrService.loadQrCodes(source: QrCodeSource.scanned);
+```
+
+---
+
+### QrCode Model
+
+**File:** `lib/models/qr_code.dart`
+
+Data model for QR codes and barcodes with support for multiple code types.
+
+**Key Classes:**
+- `QrCode` - Full code with image data
+- `QrCodeSummary` - Lightweight summary for lists
+- `QrFormat` - Enum of supported code types
+- `QrContentType` - Detected content type (WiFi, URL, vCard, etc.)
+- `WifiQrContent` - Helper for parsing/generating WiFi QR content
+
+**Supported Formats:**
+| Type | Code Types |
+|------|------------|
+| 2D | QR Code, Micro QR, Data Matrix, Aztec, PDF417, MaxiCode |
+| 1D | Code 39, Code 93, Code 128, Codabar, EAN-8, EAN-13, ITF, UPC-A, UPC-E |
+
+**Usage:**
+```dart
+// Create a WiFi QR code
+final wifi = WifiQrContent(
+  ssid: 'MyNetwork',
+  password: 'secret123',
+  authType: 'WPA',
+);
+final code = QrCode(
+  name: 'Home WiFi',
+  format: QrFormat.qrStandard,
+  content: wifi.toQrString(),
+  source: QrCodeSource.created,
+  image: imageBase64,
+  errorCorrection: QrErrorCorrection.m,
+);
+
+// Detect content type
+final contentType = QrContentType.detect(code.content);
+// Returns QrContentType.wifi
+
+// Parse WiFi content
+final parsedWifi = WifiQrContent.parse(code.content);
+print(parsedWifi.ssid); // MyNetwork
+```
+
+---
+
 ## Speech Input Widgets
 
 ### TranscribeButtonWidget
@@ -5433,6 +5528,54 @@ DebugController().triggerOpenFlasherMonitor(devicePath: '/dev/bus/usb/001/002');
 _debugController.actionStream.listen((event) {
   if (event.action == DebugAction.openFlasherMonitor) {
     // Navigate to FlasherPage with initialTab: 2 (Monitor)
+  }
+});
+```
+
+### FileViewerService
+
+**File:** `lib/services/file_viewer_service.dart`
+
+Dart service that handles external file VIEW intents from Android. When user opens an image, video, or PDF with "Open with" and selects Geogram, this service receives the file and navigates to the appropriate viewer.
+
+**Architecture:**
+1. Android `AndroidManifest.xml` declares `ACTION_VIEW` intent filters for supported MIME types
+2. `MainActivity.kt` receives the intent, copies file to cache, extracts path and MIME type
+3. Sends event to Dart via MethodChannel `dev.geogram/file_viewer`
+4. `FileViewerService` receives the event and triggers `DebugController.openExternalFile`
+5. HomePage listens for the action and navigates to PhotoViewerPage or DocumentViewerEditorPage
+
+**Supported MIME Types:**
+- Images: `image/png`, `image/jpeg`
+- Videos: `video/mp4`, `video/x-msvideo`, `video/x-matroska`, `video/quicktime`, `video/x-ms-wmv`, `video/x-flv`, `video/webm`
+- Documents: `application/pdf`
+
+**Usage:**
+```dart
+// Initialize once in main.dart (Android only)
+if (Platform.isAndroid) {
+  FileViewerService().initialize();
+}
+
+// The service automatically handles VIEW intents
+// No manual interaction required - it's event-driven
+```
+
+**DebugController Integration:**
+```dart
+// Trigger file viewer navigation programmatically
+DebugController().triggerOpenExternalFile(
+  path: '/data/data/dev.geogram/cache/external_files/photo.jpg',
+  mimeType: 'image/jpeg',
+);
+
+// Listen for the action in UI
+_debugController.actionStream.listen((event) {
+  if (event.action == DebugAction.openExternalFile) {
+    final path = event.params['path'] as String;
+    final mimeType = event.params['mimeType'] as String?;
+    // Navigate to PhotoViewerPage for images/videos
+    // Navigate to DocumentViewerEditorPage for PDFs
   }
 });
 ```

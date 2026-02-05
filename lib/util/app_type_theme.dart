@@ -75,6 +75,8 @@ IconData getAppTypeIcon(String type) {
       return Icons.auto_stories;
     case 'files':
       return Icons.snippet_folder;
+    case 'qr':
+      return Icons.qr_code_2;
     default:
       return Icons.folder;
   }
@@ -314,6 +316,14 @@ LinearGradient getAppTypeGradient(String type, bool isDark) {
         colors: isDark
             ? [const Color(0xFFF57F17), const Color(0xFFE65100)]
             : [const Color(0xFFFFCA28), const Color(0xFFFFA000)],
+      );
+    case 'qr':
+      return LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: isDark
+            ? [const Color(0xFF212121), const Color(0xFF424242)]
+            : [const Color(0xFF616161), const Color(0xFF424242)],
       );
     default:
       return LinearGradient(
