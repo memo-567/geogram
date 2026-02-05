@@ -109,25 +109,31 @@ class TransferMetricsCard extends StatelessWidget {
               const SizedBox(height: 8),
               Row(
                 children: [
-                  _buildTodayStat(
-                    context,
-                    icon: Icons.download,
-                    iconColor: Colors.blue,
-                    count: metrics.today.downloadCount,
-                    bytes: metrics.today.bytesDownloaded,
-                    label: 'Downloads',
+                  Flexible(
+                    child: _buildTodayStat(
+                      context,
+                      icon: Icons.download,
+                      iconColor: Colors.blue,
+                      count: metrics.today.downloadCount,
+                      bytes: metrics.today.bytesDownloaded,
+                      label: 'Downloads',
+                    ),
                   ),
-                  const SizedBox(width: 24),
-                  _buildTodayStat(
-                    context,
-                    icon: Icons.upload,
-                    iconColor: Colors.green,
-                    count: metrics.today.uploadCount,
-                    bytes: metrics.today.bytesUploaded,
-                    label: 'Uploads',
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: _buildTodayStat(
+                      context,
+                      icon: Icons.upload,
+                      iconColor: Colors.green,
+                      count: metrics.today.uploadCount,
+                      bytes: metrics.today.bytesUploaded,
+                      label: 'Uploads',
+                    ),
                   ),
-                  const Spacer(),
-                  _buildSuccessRate(context, metrics.today.successRate),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: _buildSuccessRate(context, metrics.today.successRate),
+                  ),
                 ],
               ),
             ],

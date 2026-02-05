@@ -49,23 +49,29 @@ class _TransferActivityChartState extends State<TransferActivityChart> {
                     fontWeight: FontWeight.bold,
                   ),
                 ),
-                const Spacer(),
-                SegmentedButton<int>(
-                  segments: List.generate(
-                    _periods.length,
-                    (i) => ButtonSegment(
-                      value: i,
-                      label: Text(_periods[i]),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    reverse: true,
+                    child: SegmentedButton<int>(
+                      segments: List.generate(
+                        _periods.length,
+                        (i) => ButtonSegment(
+                          value: i,
+                          label: Text(_periods[i]),
+                        ),
+                      ),
+                      selected: {_selectedPeriod},
+                      onSelectionChanged: (selected) {
+                        setState(() => _selectedPeriod = selected.first);
+                        _notifyPeriodChange();
+                      },
+                      style: ButtonStyle(
+                        visualDensity: VisualDensity.compact,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
                     ),
-                  ),
-                  selected: {_selectedPeriod},
-                  onSelectionChanged: (selected) {
-                    setState(() => _selectedPeriod = selected.first);
-                    _notifyPeriodChange();
-                  },
-                  style: ButtonStyle(
-                    visualDensity: VisualDensity.compact,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
                 ),
               ],
