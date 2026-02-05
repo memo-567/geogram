@@ -985,6 +985,11 @@ class DevicesService {
     // This handles both device and place proximity detection
     ProximityDetectionService().triggerScan();
 
+    // Trigger LAN discovery when BLE devices found (they're likely on same network)
+    if (bleDevices.isNotEmpty) {
+      _discoverLocalDevices(force: true);
+    }
+
     _notifyListeners();
   }
 
