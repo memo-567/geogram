@@ -345,28 +345,35 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
     }
 
     // For other formats, show a placeholder with content
+    final is1D = _selectedFormat.is1D;
     return Container(
       width: 200,
-      height: _selectedFormat.is1D ? 80 : 200,
+      height: is1D ? 100 : 200,
+      padding: const EdgeInsets.all(8),
       color: Colors.white,
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
         children: [
           Icon(
             _selectedFormat.is2D ? Icons.qr_code_2 : Icons.barcode_reader,
-            size: 48,
+            size: is1D ? 32 : 48,
             color: Colors.grey,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            _selectedFormat.displayName,
-            style: const TextStyle(color: Colors.grey),
           ),
           const SizedBox(height: 4),
           Text(
-            content.length > 30 ? '${content.substring(0, 27)}...' : content,
-            style: const TextStyle(fontSize: 10, color: Colors.grey),
-            textAlign: TextAlign.center,
+            _selectedFormat.displayName,
+            style: TextStyle(color: Colors.grey, fontSize: is1D ? 11 : 14),
+          ),
+          const SizedBox(height: 2),
+          Flexible(
+            child: Text(
+              content.length > 30 ? '${content.substring(0, 27)}...' : content,
+              style: const TextStyle(fontSize: 10, color: Colors.grey),
+              textAlign: TextAlign.center,
+              overflow: TextOverflow.ellipsis,
+              maxLines: 2,
+            ),
           ),
         ],
       ),
