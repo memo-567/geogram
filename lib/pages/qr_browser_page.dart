@@ -3,15 +3,15 @@
  * License: Apache-2.0
  */
 
-import 'dart:convert';
-import 'dart:typed_data';
+import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:qr_flutter/qr_flutter.dart' hide QrCode;
 import '../models/qr_code.dart';
 import '../services/app_service.dart';
 import '../services/i18n_service.dart';
 import '../services/profile_storage.dart';
 import '../services/qr_code_service.dart';
+import '../widgets/qr_preview_widget.dart';
 import 'qr_detail_page.dart';
 import 'qr_generator_page.dart';
 import 'qr_scanner_page.dart';
@@ -288,18 +288,32 @@ class _QrBrowserPageState extends State<QrBrowserPage>
               ],
             ),
       floatingActionButton: _tabController.index == 0
-          ? FloatingActionButton(
-              heroTag: 'scan',
-              onPressed: _openScanner,
-              tooltip: _i18n.t('scan_code'),
-              child: const Icon(Icons.qr_code_scanner),
-            )
+          ? _buildScannerFab()
           : FloatingActionButton(
               heroTag: 'create',
               onPressed: _openGenerator,
               tooltip: _i18n.t('create_code'),
               child: const Icon(Icons.add),
             ),
+    );
+  }
+
+  /// Check if camera scanning is supported on this platform
+  bool get _isScanningSupported {
+    if (kIsWeb) return false;
+    // flutter_zxing only supports camera on Android, iOS, and macOS
+    return Platform.isAndroid || Platform.isIOS || Platform.isMacOS;
+  }
+
+  /// Build the scanner FAB (hidden on unsupported platforms)
+  Widget? _buildScannerFab() {
+    if (!_isScanningSupported) return null;
+
+    return FloatingActionButton(
+      heroTag: 'scan',
+      onPressed: _openScanner,
+      tooltip: _i18n.t('scan_code'),
+      child: const Icon(Icons.qr_code_scanner),
     );
   }
 
@@ -327,7 +341,9 @@ class _QrBrowserPageState extends State<QrBrowserPage>
             Text(
               source == QrCodeSource.created
                   ? _i18n.t('tap_plus_to_create')
-                  : _i18n.t('tap_scan_to_start'),
+                  : _isScanningSupported
+                      ? _i18n.t('tap_scan_to_start')
+                      : _i18n.t('scanning_not_supported'),
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
@@ -401,7 +417,7 @@ class _QrBrowserPageState extends State<QrBrowserPage>
     final theme = Theme.of(context);
 
     return ListTile(
-      leading: _buildCodeThumbnail(code, source: source),
+      leading: QrPreviewWidget(code: code, size: 48),
       title: Text(
         code.name,
         maxLines: 1,
@@ -547,78 +563,6 @@ class _QrBrowserPageState extends State<QrBrowserPage>
       await _qrService.deleteQrCode(code.filePath!);
       await _loadCodes();
     }
-  }
-
-  Widget _buildCodeThumbnail(QrCode code, {required QrCodeSource source}) {
-    // For scanned codes, generate a live QR code so users can re-scan on other devices
-    if (source == QrCodeSource.scanned && code.format.is2D) {
-      return Container(
-        width: 48,
-        height: 48,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(4),
-          border: Border.all(
-            color: Theme.of(context).colorScheme.outlineVariant,
-          ),
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(3),
-          child: QrImageView(
-            data: code.content,
-            version: QrVersions.auto,
-            size: 48,
-            backgroundColor: Colors.white,
-            padding: const EdgeInsets.all(2),
-          ),
-        ),
-      );
-    }
-
-    // For created codes, decode base64 image (preserves custom colors/logos)
-    try {
-      final dataUri = code.image;
-      if (dataUri.startsWith('data:image/')) {
-        final base64Start = dataUri.indexOf(',') + 1;
-        final base64Data = dataUri.substring(base64Start);
-        final bytes = base64Decode(base64Data);
-
-        return Container(
-          width: 48,
-          height: 48,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(4),
-            border: Border.all(
-              color: Theme.of(context).colorScheme.outlineVariant,
-            ),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(3),
-            child: Image.memory(
-              Uint8List.fromList(bytes),
-              fit: BoxFit.contain,
-            ),
-          ),
-        );
-      }
-    } catch (e) {
-      // Fall through to placeholder
-    }
-
-    // Placeholder for barcodes and failed images
-    return Container(
-      width: 48,
-      height: 48,
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Icon(
-        code.format.is2D ? Icons.qr_code_2 : Icons.barcode_reader,
-        color: Theme.of(context).colorScheme.onSurfaceVariant,
-      ),
-    );
   }
 
   IconData _getContentTypeIcon(QrContentType type) {

@@ -9,9 +9,11 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
+import 'package:flutter_zxing/flutter_zxing.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../models/qr_code.dart' as qr_model;
+import '../services/barcode_encoder_service.dart';
 import '../services/i18n_service.dart';
 
 /// Page for generating QR codes and barcodes
@@ -100,6 +102,19 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
     _notesController.text = code.notes ?? '';
     _selectedFormat = code.format;
     _errorCorrection = code.errorCorrection ?? qr_model.QrErrorCorrection.m;
+
+    // Restore customization state
+    if (code.foregroundColor != null) {
+      _foregroundColor = Color(int.parse(code.foregroundColor!, radix: 16));
+    }
+    if (code.backgroundColor != null) {
+      _backgroundColor = Color(int.parse(code.backgroundColor!, radix: 16));
+    }
+    _roundedModules = code.roundedModules ?? false;
+    if (code.logoImage != null) {
+      _logoBytes = base64Decode(code.logoImage!);
+      _logoName = 'Saved logo';
+    }
 
     // Determine content type and fill appropriate fields
     switch (code.contentType) {
@@ -261,6 +276,11 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
     // Capture the QR code image
     final imageBase64 = await _captureQrImage();
 
+    // Prepare customization values
+    final fgColor = _foregroundColor.toARGB32().toRadixString(16).padLeft(8, '0').toUpperCase();
+    final bgColor = _backgroundColor.toARGB32().toRadixString(16).padLeft(8, '0').toUpperCase();
+    final String? logoBase64 = _logoBytes != null ? base64Encode(_logoBytes!) : null;
+
     final qr_model.QrCode code;
     if (widget.editCode != null) {
       // Editing existing code - preserve original metadata
@@ -273,6 +293,10 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
         notes: _notesController.text.trim().isNotEmpty
             ? _notesController.text.trim()
             : null,
+        foregroundColor: fgColor,
+        backgroundColor: bgColor,
+        roundedModules: _roundedModules,
+        logoImage: logoBase64,
       );
     } else {
       // Creating new code
@@ -286,6 +310,10 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
         notes: _notesController.text.trim().isNotEmpty
             ? _notesController.text.trim()
             : null,
+        foregroundColor: fgColor,
+        backgroundColor: bgColor,
+        roundedModules: _roundedModules,
+        logoImage: logoBase64,
       );
     }
 
@@ -419,9 +447,8 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
       );
     }
 
-    // Only QR codes are supported by qr_flutter
-    if (_selectedFormat.is2D &&
-        (_selectedFormat == qr_model.QrFormat.qrStandard || _selectedFormat == qr_model.QrFormat.qrMicro)) {
+    // QR codes - use qr_flutter (supports customization)
+    if (_selectedFormat == qr_model.QrFormat.qrStandard || _selectedFormat == qr_model.QrFormat.qrMicro) {
       return QrImageView(
         data: content,
         version: QrVersions.auto,
@@ -443,8 +470,31 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
       );
     }
 
-    // For other formats, show a placeholder with content
+    // All other formats - use flutter_zxing via BarcodeEncoderService
     final is1D = _selectedFormat.is1D;
+    final previewHeight = is1D ? 70 : 140;
+
+    final pngBytes = BarcodeEncoderService.encodeToImage(
+      content: content,
+      format: _getZxingFormat(_selectedFormat),
+      width: 140,
+      height: previewHeight,
+      margin: 4,
+    );
+
+    if (pngBytes != null) {
+      return Container(
+        color: Colors.white,
+        child: Image.memory(
+          pngBytes,
+          width: 140,
+          height: previewHeight.toDouble(),
+          fit: BoxFit.contain,
+        ),
+      );
+    }
+
+    // Fallback to placeholder if encoding fails
     return Container(
       width: 140,
       height: is1D ? 70 : 140,
@@ -479,6 +529,40 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
         ],
       ),
     );
+  }
+
+  int _getZxingFormat(qr_model.QrFormat format) {
+    switch (format) {
+      case qr_model.QrFormat.qrStandard:
+      case qr_model.QrFormat.qrMicro:
+        return Format.qrCode;
+      case qr_model.QrFormat.dataMatrix:
+        return Format.dataMatrix;
+      case qr_model.QrFormat.aztec:
+        return Format.aztec;
+      case qr_model.QrFormat.pdf417:
+        return Format.pdf417;
+      case qr_model.QrFormat.maxicode:
+        return Format.maxiCode;
+      case qr_model.QrFormat.barcodeCode39:
+        return Format.code39;
+      case qr_model.QrFormat.barcodeCode93:
+        return Format.code93;
+      case qr_model.QrFormat.barcodeCode128:
+        return Format.code128;
+      case qr_model.QrFormat.barcodeCodabar:
+        return Format.codabar;
+      case qr_model.QrFormat.barcodeEan8:
+        return Format.ean8;
+      case qr_model.QrFormat.barcodeEan13:
+        return Format.ean13;
+      case qr_model.QrFormat.barcodeItf:
+        return Format.itf;
+      case qr_model.QrFormat.barcodeUpca:
+        return Format.upca;
+      case qr_model.QrFormat.barcodeUpce:
+        return Format.upce;
+    }
   }
 
   int _getQrErrorLevel() {

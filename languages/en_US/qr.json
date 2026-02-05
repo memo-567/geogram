@@ -53,5 +53,6 @@
   "folder_name_hint": "e.g. WiFi, Products",
   "move_to_folder": "Move to Folder",
   "no_folder": "No Folder (Root)",
-  "code_moved": "Code moved successfully"
+  "code_moved": "Code moved successfully",
+  "scanning_not_supported": "Camera scanning not available on this platform"
 }

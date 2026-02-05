@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_zxing/flutter_zxing.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../models/qr_code.dart';
+import '../services/barcode_encoder_service.dart';
 import '../services/i18n_service.dart';
 
 /// Page for scanning QR codes and barcodes
@@ -159,22 +160,19 @@ class _QrScannerPageState extends State<QrScannerPage> {
 
   Future<String> _generateCodeImage(String content, QrFormat format) async {
     try {
-      // Use zxing to encode the scanned content back to an image
+      // Use the barcode encoder service to generate a proper PNG image
       final encodeFormat = _getEncodeFormat(format);
-      final result = zx.encodeBarcode(
-        contents: content,
-        params: EncodeParams(
-          format: encodeFormat,
-          width: 300,
-          height: format.is1D ? 100 : 300,
-          margin: 10,
-        ),
+      final pngBytes = BarcodeEncoderService.encodeToImage(
+        content: content,
+        format: encodeFormat,
+        width: 300,
+        height: format.is1D ? 100 : 300,
+        margin: 10,
       );
 
-      if (result.isValid && result.data != null) {
-        // The result.data is already RGBA pixels, convert to PNG using raw encoding
-        final base64 = base64Encode(result.data!);
-        return 'data:image/raw;base64,$base64';
+      if (pngBytes != null) {
+        final base64 = base64Encode(pngBytes);
+        return 'data:image/png;base64,$base64';
       }
     } catch (e) {
       // Fall back to placeholder

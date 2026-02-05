@@ -53,5 +53,6 @@
   "folder_name_hint": "ex. WiFi, Produtos",
   "move_to_folder": "Mover para Pasta",
   "no_folder": "Sem Pasta (Raiz)",
-  "code_moved": "Código movido com sucesso"
+  "code_moved": "Código movido com sucesso",
+  "scanning_not_supported": "Digitalização por câmara não disponível nesta plataforma"
 }
