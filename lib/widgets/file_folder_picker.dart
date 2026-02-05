@@ -784,18 +784,25 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
-    return Focus(
-      focusNode: _keyboardFocusNode,
-      autofocus: true,
-      onKeyEvent: (node, event) {
-        if (event is KeyDownEvent &&
-            event.logicalKey == LogicalKeyboardKey.backspace) {
+    return PopScope(
+      canPop: !_canNavigateUp,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && _canNavigateUp) {
           _navigateUp();
-          return KeyEventResult.handled;
         }
-        return KeyEventResult.ignored;
       },
-      child: Scaffold(
+      child: Focus(
+        focusNode: _keyboardFocusNode,
+        autofocus: true,
+        onKeyEvent: (node, event) {
+          if (event is KeyDownEvent &&
+              event.logicalKey == LogicalKeyboardKey.backspace) {
+            _navigateUp();
+            return KeyEventResult.handled;
+          }
+          return KeyEventResult.ignored;
+        },
+        child: Scaffold(
       backgroundColor: colorScheme.surface,
       appBar: widget.explorerMode ? null : AppBar(
         elevation: 0,
@@ -845,6 +852,7 @@ class FileFolderPickerState extends State<FileFolderPicker> {
           // Selection bar (hidden in explorer mode)
           if (!widget.explorerMode) _buildSelectionBar(theme),
         ],
+      ),
       ),
     ),
     );
@@ -1184,10 +1192,12 @@ class FileFolderPickerState extends State<FileFolderPicker> {
                       children: [
                         _buildSizeDisplay(theme, item),
                         const SizedBox(width: 8),
-                        _buildDetailChip(
-                          theme,
-                          _formatDate(item.modified),
-                          true,
+                        Flexible(
+                          child: _buildDetailChip(
+                            theme,
+                            _formatDate(item.modified),
+                            true,
+                          ),
                         ),
                       ],
                     ),
@@ -1223,6 +1233,7 @@ class FileFolderPickerState extends State<FileFolderPicker> {
       style: theme.textTheme.bodySmall?.copyWith(
         color: theme.colorScheme.onSurfaceVariant,
       ),
+      overflow: TextOverflow.ellipsis,
     );
   }
 
