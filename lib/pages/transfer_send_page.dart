@@ -527,7 +527,7 @@ class _TransferSendPageState extends State<TransferSendPage> {
                           borderRadius: BorderRadius.circular(8),
                           child: ConstrainedBox(
                             constraints: const BoxConstraints(
-                              maxHeight: 250,
+                              maxHeight: 300,
                               maxWidth: 350,
                             ),
                             child: ListView.builder(
@@ -576,53 +576,56 @@ class _TransferSendPageState extends State<TransferSendPage> {
 
     return InkWell(
       onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        child: Row(
-          children: [
-            // Online indicator
-            Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                color: device.isOnline ? Colors.green : Colors.grey,
-                shape: BoxShape.circle,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Primary: nickname or callsign
-                  Text(
-                    hasNickname ? device.nickname! : device.callsign,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  // Secondary: callsign if nickname exists, or connection info
-                  if (hasNickname)
-                    Text(
-                      device.callsign,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                        fontFamily: 'monospace',
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            // Connection methods
-            if (device.connectionMethods.isNotEmpty)
-              Text(
-                device.connectionMethods.take(2).join(' • '),
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 48),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              // Online indicator
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: device.isOnline ? Colors.green : Colors.grey,
+                  shape: BoxShape.circle,
                 ),
               ),
-          ],
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Primary: nickname or callsign
+                    Text(
+                      hasNickname ? device.nickname! : device.callsign,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    // Secondary: callsign if nickname exists, or connection info
+                    if (hasNickname)
+                      Text(
+                        device.callsign,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              // Connection methods
+              if (device.connectionMethods.isNotEmpty)
+                Text(
+                  device.connectionMethods.take(2).join(' • '),
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -683,34 +686,36 @@ class _TransferSendPageState extends State<TransferSendPage> {
   }
 
   Widget _buildEmptyState(ThemeData theme) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.upload_file,
-              size: 64,
-              color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'No files selected',
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+    return SingleChildScrollView(
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.upload_file,
+                size: 64,
+                color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
               ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Add files or folders to send',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant.withOpacity(0.7),
+              const SizedBox(height: 16),
+              Text(
+                'No files selected',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
-              textAlign: TextAlign.center,
-            ),
-          ],
+              const SizedBox(height: 8),
+              Text(
+                'Add files or folders to send',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant.withOpacity(0.7),
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
         ),
       ),
     );
