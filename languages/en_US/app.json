@@ -101,6 +101,9 @@
   "app_type_files": "Files",
   "app_type_desc_files": "Browse and manage files on your device. View the geogram profile folder contents and navigate the filesystem. Opens documents, images, music, and videos with built-in viewers.",
   "app_type_features_files": "Profile folder browser|Device file navigation|Built-in document viewer|Image, music, and video playback|Storage location shortcuts",
+  "app_type_qr": "QR Codes",
+  "app_type_desc_qr": "Scan and generate QR codes and barcodes. Create WiFi sharing codes, URLs, contacts, and more. Organize your codes in folders and share them as images.",
+  "app_type_features_qr": "Scan QR codes and barcodes|Generate WiFi, URL, contact codes|Support for EAN, UPC, Code 128|Organize in folders|Share as images",
   "app_updates": "App Updates",
   "app_updates_desc": "Notify when apps are updated or synced",
 

@@ -101,6 +101,9 @@
   "app_type_files": "Ficheiros",
   "app_type_desc_files": "Navegue os ficheiros no seu dispositivo. Visualize o conteúdo da pasta de perfil geogram e navegue no sistema de ficheiros. Abre documentos, imagens, música e vídeos com visualizadores integrados.",
   "app_type_features_files": "Navegador da pasta de perfil|Navegação no sistema de ficheiros|Visualizador de documentos integrado|Reprodução de imagens, música e vídeo|Atalhos de localizações de armazenamento",
+  "app_type_qr": "Códigos QR",
+  "app_type_desc_qr": "Digitalize e gere códigos QR e códigos de barras. Crie códigos de partilha WiFi, URLs, contactos e mais. Organize os seus códigos em pastas e partilhe-os como imagens.",
+  "app_type_features_qr": "Digitalizar códigos QR e barras|Gerar códigos WiFi, URL, contacto|Suporte para EAN, UPC, Code 128|Organizar em pastas|Partilhar como imagens",
   "app_updates": "Atualizações de Apps",
   "app_updates_desc": "Notificar quando apps são atualizadas ou sincronizadas",
 

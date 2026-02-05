@@ -40,6 +40,7 @@ class I18nService {
     'tracker',
     'work',
     'stories',
+    'qr',
   ];
 
   // Notifier for UI updates when language changes
