@@ -6,7 +6,6 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
-import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_zxing/flutter_zxing.dart';
@@ -30,7 +29,6 @@ class _QrScannerPageState extends State<QrScannerPage> {
   bool _permissionDenied = false;
   bool _permissionPermanentlyDenied = false;
   String? _scanError;
-  Code? _lastCode;
 
   @override
   void initState() {
@@ -80,7 +78,6 @@ class _QrScannerPageState extends State<QrScannerPage> {
   void _resetScanner() {
     setState(() {
       _hasScanned = false;
-      _lastCode = null;
       _scanError = null;
     });
   }
@@ -94,7 +91,6 @@ class _QrScannerPageState extends State<QrScannerPage> {
 
     setState(() {
       _hasScanned = true;
-      _lastCode = code;
     });
 
     _showScanResult(code);
@@ -140,41 +136,25 @@ class _QrScannerPageState extends State<QrScannerPage> {
     }
   }
 
-  QrFormat _mapZxingFormat(Format? format) {
+  QrFormat _mapZxingFormat(int? format) {
     if (format == null) return QrFormat.qrStandard;
 
-    switch (format) {
-      case Format.qrCode:
-        return QrFormat.qrStandard;
-      case Format.dataMatrix:
-        return QrFormat.dataMatrix;
-      case Format.aztec:
-        return QrFormat.aztec;
-      case Format.pdf417:
-        return QrFormat.pdf417;
-      case Format.maxiCode:
-        return QrFormat.maxicode;
-      case Format.code39:
-        return QrFormat.barcodeCode39;
-      case Format.code93:
-        return QrFormat.barcodeCode93;
-      case Format.code128:
-        return QrFormat.barcodeCode128;
-      case Format.codabar:
-        return QrFormat.barcodeCodabar;
-      case Format.ean8:
-        return QrFormat.barcodeEan8;
-      case Format.ean13:
-        return QrFormat.barcodeEan13;
-      case Format.itf:
-        return QrFormat.barcodeItf;
-      case Format.upcA:
-        return QrFormat.barcodeUpca;
-      case Format.upcE:
-        return QrFormat.barcodeUpce;
-      default:
-        return QrFormat.qrStandard;
-    }
+    if (format == Format.qrCode) return QrFormat.qrStandard;
+    if (format == Format.dataMatrix) return QrFormat.dataMatrix;
+    if (format == Format.aztec) return QrFormat.aztec;
+    if (format == Format.pdf417) return QrFormat.pdf417;
+    if (format == Format.maxiCode) return QrFormat.maxicode;
+    if (format == Format.code39) return QrFormat.barcodeCode39;
+    if (format == Format.code93) return QrFormat.barcodeCode93;
+    if (format == Format.code128) return QrFormat.barcodeCode128;
+    if (format == Format.codabar) return QrFormat.barcodeCodabar;
+    if (format == Format.ean8) return QrFormat.barcodeEan8;
+    if (format == Format.ean13) return QrFormat.barcodeEan13;
+    if (format == Format.itf) return QrFormat.barcodeItf;
+    if (format == Format.upca) return QrFormat.barcodeUpca;
+    if (format == Format.upce) return QrFormat.barcodeUpce;
+
+    return QrFormat.qrStandard;
   }
 
   Future<String> _generateCodeImage(String content, QrFormat format) async {
@@ -204,7 +184,7 @@ class _QrScannerPageState extends State<QrScannerPage> {
     return _generatePlaceholderImage(format);
   }
 
-  Format _getEncodeFormat(QrFormat format) {
+  int _getEncodeFormat(QrFormat format) {
     switch (format) {
       case QrFormat.qrStandard:
       case QrFormat.qrMicro:
@@ -230,9 +210,9 @@ class _QrScannerPageState extends State<QrScannerPage> {
       case QrFormat.barcodeItf:
         return Format.itf;
       case QrFormat.barcodeUpca:
-        return Format.upcA;
+        return Format.upca;
       case QrFormat.barcodeUpce:
-        return Format.upcE;
+        return Format.upce;
       default:
         return Format.qrCode;
     }

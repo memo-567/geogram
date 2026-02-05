@@ -4,12 +4,11 @@
  */
 
 import 'dart:convert';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import '../models/qr_code.dart';
+import '../models/qr_code.dart' as qr_model;
 import '../services/i18n_service.dart';
 
 /// Page for generating QR codes and barcodes
@@ -18,7 +17,7 @@ class QrGeneratorPage extends StatefulWidget {
   final String? initialContent;
 
   /// Pre-select format (optional)
-  final QrFormat? initialFormat;
+  final qr_model.QrFormat? initialFormat;
 
   const QrGeneratorPage({
     super.key,
@@ -51,8 +50,8 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
   late TextEditingController _contactPhoneController;
   late TextEditingController _contactEmailController;
 
-  QrFormat _selectedFormat = QrFormat.qrStandard;
-  QrErrorCorrection _errorCorrection = QrErrorCorrection.m;
+  qr_model.QrFormat _selectedFormat = qr_model.QrFormat.qrStandard;
+  qr_model.QrErrorCorrection _errorCorrection = qr_model.QrErrorCorrection.m;
   String _contentType = 'text'; // text, url, wifi, contact
 
   @override
@@ -116,7 +115,7 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
       case 'url':
         return _contentController.text;
       case 'wifi':
-        return WifiQrContent(
+        return qr_model.WifiQrContent(
           ssid: _wifiSsidController.text,
           password: _wifiPasswordController.text,
           authType: _wifiAuthType,
@@ -193,11 +192,11 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
     // Capture the QR code image
     final imageBase64 = await _captureQrImage();
 
-    final code = QrCode(
+    final code = qr_model.QrCode(
       name: name,
       format: _selectedFormat,
       content: content,
-      source: QrCodeSource.created,
+      source: qr_model.QrCodeSource.created,
       image: imageBase64,
       errorCorrection: _errorCorrection,
       notes: _notesController.text.trim().isNotEmpty
@@ -335,7 +334,7 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
 
     // Only QR codes are supported by qr_flutter
     if (_selectedFormat.is2D &&
-        (_selectedFormat == QrFormat.qrStandard || _selectedFormat == QrFormat.qrMicro)) {
+        (_selectedFormat == qr_model.QrFormat.qrStandard || _selectedFormat == qr_model.QrFormat.qrMicro)) {
       return QrImageView(
         data: content,
         version: QrVersions.auto,
@@ -376,13 +375,13 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
 
   int _getQrErrorLevel() {
     switch (_errorCorrection) {
-      case QrErrorCorrection.l:
+      case qr_model.QrErrorCorrection.l:
         return QrErrorCorrectLevel.L;
-      case QrErrorCorrection.m:
+      case qr_model.QrErrorCorrection.m:
         return QrErrorCorrectLevel.M;
-      case QrErrorCorrection.q:
+      case qr_model.QrErrorCorrection.q:
         return QrErrorCorrectLevel.Q;
-      case QrErrorCorrection.h:
+      case qr_model.QrErrorCorrection.h:
         return QrErrorCorrectLevel.H;
     }
   }
@@ -580,17 +579,17 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
           spacing: 8,
           runSpacing: 8,
           children: [
-            _buildFormatChip(QrFormat.qrStandard),
-            _buildFormatChip(QrFormat.dataMatrix),
-            _buildFormatChip(QrFormat.aztec),
-            _buildFormatChip(QrFormat.barcodeCode128),
+            _buildFormatChip(qr_model.QrFormat.qrStandard),
+            _buildFormatChip(qr_model.QrFormat.dataMatrix),
+            _buildFormatChip(qr_model.QrFormat.aztec),
+            _buildFormatChip(qr_model.QrFormat.barcodeCode128),
           ],
         ),
         const SizedBox(height: 16),
 
         // Error correction (only for QR codes)
-        if (_selectedFormat == QrFormat.qrStandard ||
-            _selectedFormat == QrFormat.qrMicro) ...[
+        if (_selectedFormat == qr_model.QrFormat.qrStandard ||
+            _selectedFormat == qr_model.QrFormat.qrMicro) ...[
           Text(
             _i18n.t('error_correction'),
             style: Theme.of(context).textTheme.titleSmall,
@@ -598,7 +597,7 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
           const SizedBox(height: 8),
           Wrap(
             spacing: 8,
-            children: QrErrorCorrection.values.map((ec) {
+            children: qr_model.QrErrorCorrection.values.map((ec) {
               return ChoiceChip(
                 label: Text(ec.displayName),
                 selected: _errorCorrection == ec,
@@ -615,7 +614,7 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
     );
   }
 
-  Widget _buildFormatChip(QrFormat format) {
+  Widget _buildFormatChip(qr_model.QrFormat format) {
     return ChoiceChip(
       label: Text(format.displayName),
       selected: _selectedFormat == format,
