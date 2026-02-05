@@ -39,5 +39,19 @@
   "call": "Ligar",
   "send_sms": "Enviar SMS",
   "open_map": "Abrir Mapa",
-  "open": "Abrir"
+  "open": "Abrir",
+  "customization": "Personalização",
+  "foreground_color": "Cor do Primeiro Plano",
+  "background_color": "Cor de Fundo",
+  "rounded_modules": "Módulos Arredondados",
+  "center_logo": "Logótipo Central",
+  "pick_color": "Escolher Cor",
+  "select": "Selecionar",
+  "logo_low_ec_warning": "Usar um logótipo com correção de erros Baixa pode tornar o código QR ilegível. Considere usar Média ou superior.",
+  "create_folder": "Criar Pasta",
+  "folder_name": "Nome da Pasta",
+  "folder_name_hint": "ex. WiFi, Produtos",
+  "move_to_folder": "Mover para Pasta",
+  "no_folder": "Sem Pasta (Raiz)",
+  "code_moved": "Código movido com sucesso"
 }

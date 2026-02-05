@@ -4,9 +4,12 @@
  */
 
 import 'dart:convert';
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter_colorpicker/flutter_colorpicker.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../models/qr_code.dart' as qr_model;
 import '../services/i18n_service.dart';
@@ -19,10 +22,14 @@ class QrGeneratorPage extends StatefulWidget {
   /// Pre-select format (optional)
   final qr_model.QrFormat? initialFormat;
 
+  /// Code to edit (optional) - when provided, page works in edit mode
+  final qr_model.QrCode? editCode;
+
   const QrGeneratorPage({
     super.key,
     this.initialContent,
     this.initialFormat,
+    this.editCode,
   });
 
   @override
@@ -54,6 +61,13 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
   qr_model.QrErrorCorrection _errorCorrection = qr_model.QrErrorCorrection.m;
   String _contentType = 'text'; // text, url, wifi, contact
 
+  // Customization state
+  Color _foregroundColor = Colors.black;
+  Color _backgroundColor = Colors.white;
+  bool _roundedModules = false;
+  Uint8List? _logoBytes;
+  String? _logoName;
+
   @override
   void initState() {
     super.initState();
@@ -73,6 +87,61 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
 
     if (widget.initialFormat != null) {
       _selectedFormat = widget.initialFormat!;
+    }
+
+    // Pre-fill fields if editing an existing code
+    if (widget.editCode != null) {
+      _initFromEditCode(widget.editCode!);
+    }
+  }
+
+  void _initFromEditCode(qr_model.QrCode code) {
+    _nameController.text = code.name;
+    _notesController.text = code.notes ?? '';
+    _selectedFormat = code.format;
+    _errorCorrection = code.errorCorrection ?? qr_model.QrErrorCorrection.m;
+
+    // Determine content type and fill appropriate fields
+    switch (code.contentType) {
+      case qr_model.QrContentType.wifi:
+        _contentType = 'wifi';
+        _tabController.index = 2;
+        final wifi = qr_model.WifiQrContent.parse(code.content);
+        _wifiSsidController.text = wifi.ssid;
+        _wifiPasswordController.text = wifi.password ?? '';
+        _wifiAuthType = wifi.authType;
+        _wifiHidden = wifi.hidden;
+        break;
+      case qr_model.QrContentType.vcard:
+      case qr_model.QrContentType.mecard:
+        _contentType = 'contact';
+        _tabController.index = 3;
+        _parseContactFromContent(code.content);
+        break;
+      case qr_model.QrContentType.url:
+        _contentType = 'url';
+        _tabController.index = 1;
+        _contentController.text = code.content;
+        break;
+      default:
+        _contentType = 'text';
+        _tabController.index = 0;
+        _contentController.text = code.content;
+        break;
+    }
+  }
+
+  void _parseContactFromContent(String content) {
+    // Parse vCard format
+    final lines = content.split('\n');
+    for (final line in lines) {
+      if (line.startsWith('FN:')) {
+        _contactNameController.text = line.substring(3).trim();
+      } else if (line.startsWith('TEL:')) {
+        _contactPhoneController.text = line.substring(4).trim();
+      } else if (line.startsWith('EMAIL:')) {
+        _contactEmailController.text = line.substring(6).trim();
+      }
     }
   }
 
@@ -192,17 +261,33 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
     // Capture the QR code image
     final imageBase64 = await _captureQrImage();
 
-    final code = qr_model.QrCode(
-      name: name,
-      format: _selectedFormat,
-      content: content,
-      source: qr_model.QrCodeSource.created,
-      image: imageBase64,
-      errorCorrection: _errorCorrection,
-      notes: _notesController.text.trim().isNotEmpty
-          ? _notesController.text.trim()
-          : null,
-    );
+    final qr_model.QrCode code;
+    if (widget.editCode != null) {
+      // Editing existing code - preserve original metadata
+      code = widget.editCode!.copyWith(
+        name: name,
+        format: _selectedFormat,
+        content: content,
+        image: imageBase64,
+        errorCorrection: _errorCorrection,
+        notes: _notesController.text.trim().isNotEmpty
+            ? _notesController.text.trim()
+            : null,
+      );
+    } else {
+      // Creating new code
+      code = qr_model.QrCode(
+        name: name,
+        format: _selectedFormat,
+        content: content,
+        source: qr_model.QrCodeSource.created,
+        image: imageBase64,
+        errorCorrection: _errorCorrection,
+        notes: _notesController.text.trim().isNotEmpty
+            ? _notesController.text.trim()
+            : null,
+      );
+    }
 
     if (mounted) {
       Navigator.pop(context, code);
@@ -240,9 +325,11 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
+    final isEditing = widget.editCode != null;
+
     return Scaffold(
       appBar: AppBar(
-        title: Text(_i18n.t('create_code')),
+        title: Text(_i18n.t(isEditing ? 'edit_code' : 'create_code')),
         actions: [
           IconButton(
             icon: const Icon(Icons.save),
@@ -339,8 +426,20 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
         data: content,
         version: QrVersions.auto,
         size: 140,
-        backgroundColor: Colors.white,
+        backgroundColor: _backgroundColor,
         errorCorrectionLevel: _getQrErrorLevel(),
+        eyeStyle: QrEyeStyle(
+          eyeShape: _roundedModules ? QrEyeShape.circle : QrEyeShape.square,
+          color: _foregroundColor,
+        ),
+        dataModuleStyle: QrDataModuleStyle(
+          dataModuleShape: _roundedModules ? QrDataModuleShape.circle : QrDataModuleShape.square,
+          color: _foregroundColor,
+        ),
+        embeddedImage: _logoBytes != null ? MemoryImage(_logoBytes!) : null,
+        embeddedImageStyle: const QrEmbeddedImageStyle(
+          size: Size(30, 30),
+        ),
       );
     }
 
@@ -620,6 +719,59 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
             }).toList(),
           ),
         ],
+
+        // Customization section (only for QR codes)
+        if (_selectedFormat == qr_model.QrFormat.qrStandard) ...[
+          const Divider(),
+          const SizedBox(height: 8),
+
+          Text(_i18n.t('customization'), style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 12),
+
+          // Foreground color
+          _buildColorRow(_i18n.t('foreground_color'), _foregroundColor, (c) => setState(() => _foregroundColor = c)),
+
+          // Background color
+          _buildColorRow(_i18n.t('background_color'), _backgroundColor, (c) => setState(() => _backgroundColor = c)),
+
+          const SizedBox(height: 8),
+
+          // Rounded modules switch
+          SwitchListTile(
+            title: Text(_i18n.t('rounded_modules')),
+            value: _roundedModules,
+            onChanged: (v) => setState(() => _roundedModules = v),
+            contentPadding: EdgeInsets.zero,
+          ),
+
+          // Logo picker
+          ListTile(
+            title: Text(_i18n.t('center_logo')),
+            subtitle: _logoName != null ? Text(_logoName!) : null,
+            contentPadding: EdgeInsets.zero,
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_logoBytes != null)
+                  IconButton(icon: const Icon(Icons.clear), onPressed: _clearLogo),
+                IconButton(icon: const Icon(Icons.add_photo_alternate), onPressed: _pickLogo),
+              ],
+            ),
+          ),
+
+          // Warning for low error correction with logo
+          if (_logoBytes != null && _errorCorrection == qr_model.QrErrorCorrection.l)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                _i18n.t('logo_low_ec_warning'),
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.error,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+        ],
       ],
     );
   }
@@ -638,5 +790,77 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
         }
       },
     );
+  }
+
+  Widget _buildColorRow(String label, Color color, ValueChanged<Color> onChanged) {
+    return ListTile(
+      title: Text(label),
+      contentPadding: EdgeInsets.zero,
+      trailing: GestureDetector(
+        onTap: () => _showColorPicker(color, onChanged),
+        child: Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: color,
+            border: Border.all(color: Colors.grey),
+            borderRadius: BorderRadius.circular(4),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showColorPicker(Color current, ValueChanged<Color> onChanged) async {
+    Color selected = current;
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('pick_color')),
+        content: SingleChildScrollView(
+          child: ColorPicker(
+            pickerColor: current,
+            onColorChanged: (c) => selected = c,
+            enableAlpha: false,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () {
+              onChanged(selected);
+              Navigator.pop(context);
+            },
+            child: Text(_i18n.t('select')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _pickLogo() async {
+    final picker = ImagePicker();
+    final image = await picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 200,
+      maxHeight: 200,
+    );
+    if (image != null) {
+      final bytes = await image.readAsBytes();
+      setState(() {
+        _logoBytes = bytes;
+        _logoName = image.name;
+      });
+    }
+  }
+
+  void _clearLogo() {
+    setState(() {
+      _logoBytes = null;
+      _logoName = null;
+    });
   }
 }

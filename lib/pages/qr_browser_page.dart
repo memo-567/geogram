@@ -6,6 +6,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:qr_flutter/qr_flutter.dart' hide QrCode;
 import '../models/qr_code.dart';
 import '../services/app_service.dart';
 import '../services/i18n_service.dart';
@@ -49,6 +50,7 @@ class _QrBrowserPageState extends State<QrBrowserPage>
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    _tabController.addListener(() => setState(() {})); // Rebuild for FAB changes
     _searchController.addListener(_filterCodes);
     _initialize();
   }
@@ -132,6 +134,43 @@ class _QrBrowserPageState extends State<QrBrowserPage>
     });
   }
 
+  Future<void> _showCreateFolderDialog() async {
+    final controller = TextEditingController();
+    final source = _tabController.index == 0
+        ? QrCodeSource.scanned
+        : QrCodeSource.created;
+
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('create_folder')),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: _i18n.t('folder_name'),
+            hintText: _i18n.t('folder_name_hint'),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: Text(_i18n.t('create')),
+          ),
+        ],
+      ),
+    );
+
+    if (result != null && result.isNotEmpty) {
+      await _qrService.createSubfolder(source, result);
+      await _loadCodes();
+    }
+  }
+
   Future<void> _openScanner() async {
     final result = await Navigator.push<QrCode>(
       context,
@@ -201,8 +240,6 @@ class _QrBrowserPageState extends State<QrBrowserPage>
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return Scaffold(
       appBar: AppBar(
         title: _isSearching
@@ -221,17 +258,22 @@ class _QrBrowserPageState extends State<QrBrowserPage>
             onPressed: _toggleSearch,
             tooltip: _isSearching ? _i18n.t('cancel') : _i18n.t('search'),
           ),
+          IconButton(
+            icon: const Icon(Icons.create_new_folder),
+            onPressed: _showCreateFolderDialog,
+            tooltip: _i18n.t('create_folder'),
+          ),
         ],
         bottom: TabBar(
           controller: _tabController,
           tabs: [
             Tab(
-              icon: const Icon(Icons.qr_code),
-              text: '${_i18n.t('created')} (${_filteredCreated.length})',
-            ),
-            Tab(
               icon: const Icon(Icons.qr_code_scanner),
               text: '${_i18n.t('scanned')} (${_filteredScanned.length})',
+            ),
+            Tab(
+              icon: const Icon(Icons.qr_code),
+              text: '${_i18n.t('created')} (${_filteredCreated.length})',
             ),
           ],
         ),
@@ -241,28 +283,23 @@ class _QrBrowserPageState extends State<QrBrowserPage>
           : TabBarView(
               controller: _tabController,
               children: [
-                _buildCodeList(_filteredCreated, QrCodeSource.created),
                 _buildCodeList(_filteredScanned, QrCodeSource.scanned),
+                _buildCodeList(_filteredCreated, QrCodeSource.created),
               ],
             ),
-      floatingActionButton: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          FloatingActionButton.small(
-            heroTag: 'scan',
-            onPressed: _openScanner,
-            tooltip: _i18n.t('scan_code'),
-            child: const Icon(Icons.qr_code_scanner),
-          ),
-          const SizedBox(height: 8),
-          FloatingActionButton(
-            heroTag: 'create',
-            onPressed: _openGenerator,
-            tooltip: _i18n.t('create_code'),
-            child: const Icon(Icons.add),
-          ),
-        ],
-      ),
+      floatingActionButton: _tabController.index == 0
+          ? FloatingActionButton(
+              heroTag: 'scan',
+              onPressed: _openScanner,
+              tooltip: _i18n.t('scan_code'),
+              child: const Icon(Icons.qr_code_scanner),
+            )
+          : FloatingActionButton(
+              heroTag: 'create',
+              onPressed: _openGenerator,
+              tooltip: _i18n.t('create_code'),
+              child: const Icon(Icons.add),
+            ),
     );
   }
 
@@ -353,18 +390,18 @@ class _QrBrowserPageState extends State<QrBrowserPage>
                 ),
               ),
             ],
-            ...categoryCodes.map((code) => _buildCodeTile(code)),
+            ...categoryCodes.map((code) => _buildCodeTile(code, source: source)),
           ],
         );
       },
     );
   }
 
-  Widget _buildCodeTile(QrCode code) {
+  Widget _buildCodeTile(QrCode code, {required QrCodeSource source}) {
     final theme = Theme.of(context);
 
     return ListTile(
-      leading: _buildCodeThumbnail(code),
+      leading: _buildCodeThumbnail(code, source: source),
       title: Text(
         code.name,
         maxLines: 1,
@@ -403,11 +440,142 @@ class _QrBrowserPageState extends State<QrBrowserPage>
         ),
       ),
       onTap: () => _openDetail(code),
+      onLongPress: () => _showCodeContextMenu(code),
     );
   }
 
-  Widget _buildCodeThumbnail(QrCode code) {
-    // Decode base64 image
+  void _showCodeContextMenu(QrCode code) {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.drive_file_move),
+              title: Text(_i18n.t('move_to_folder')),
+              onTap: () {
+                Navigator.pop(context);
+                _showMoveCodeDialog(code);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete, color: Colors.red),
+              title: Text(
+                _i18n.t('delete'),
+                style: const TextStyle(color: Colors.red),
+              ),
+              onTap: () {
+                Navigator.pop(context);
+                _confirmDelete(code);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showMoveCodeDialog(QrCode code) async {
+    final folders = await _qrService.getSubfolders(code.source);
+
+    if (!mounted) return;
+
+    final result = await showDialog<String?>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('move_to_folder')),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // "No folder" option (root)
+              ListTile(
+                leading: const Icon(Icons.folder_off),
+                title: Text(_i18n.t('no_folder')),
+                selected: code.category == null,
+                onTap: () => Navigator.pop(context, ''),
+              ),
+              // Existing folders
+              ...folders.map((folder) => ListTile(
+                    leading: const Icon(Icons.folder),
+                    title: Text(folder),
+                    selected: code.category == folder,
+                    onTap: () => Navigator.pop(context, folder),
+                  )),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (result != null) {
+      final targetFolder = result.isEmpty ? null : result;
+      if (targetFolder != code.category) {
+        await _qrService.moveQrCode(code, targetFolder);
+        await _loadCodes();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(_i18n.t('code_moved'))),
+          );
+        }
+      }
+    }
+  }
+
+  Future<void> _confirmDelete(QrCode code) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('delete_code')),
+        content: Text(_i18n.t('delete_code_confirm')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: Text(_i18n.t('delete')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && code.filePath != null) {
+      await _qrService.deleteQrCode(code.filePath!);
+      await _loadCodes();
+    }
+  }
+
+  Widget _buildCodeThumbnail(QrCode code, {required QrCodeSource source}) {
+    // For scanned codes, generate a live QR code so users can re-scan on other devices
+    if (source == QrCodeSource.scanned && code.format.is2D) {
+      return Container(
+        width: 48,
+        height: 48,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(
+            color: Theme.of(context).colorScheme.outlineVariant,
+          ),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(3),
+          child: QrImageView(
+            data: code.content,
+            version: QrVersions.auto,
+            size: 48,
+            backgroundColor: Colors.white,
+            padding: const EdgeInsets.all(2),
+          ),
+        ),
+      );
+    }
+
+    // For created codes, decode base64 image (preserves custom colors/logos)
     try {
       final dataUri = code.image;
       if (dataUri.startsWith('data:image/')) {
@@ -438,7 +606,7 @@ class _QrBrowserPageState extends State<QrBrowserPage>
       // Fall through to placeholder
     }
 
-    // Placeholder
+    // Placeholder for barcodes and failed images
     return Container(
       width: 48,
       height: 48,

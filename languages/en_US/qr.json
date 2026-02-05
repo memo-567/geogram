@@ -39,5 +39,19 @@
   "call": "Call",
   "send_sms": "Send SMS",
   "open_map": "Open Map",
-  "open": "Open"
+  "open": "Open",
+  "customization": "Customization",
+  "foreground_color": "Foreground Color",
+  "background_color": "Background Color",
+  "rounded_modules": "Rounded Modules",
+  "center_logo": "Center Logo",
+  "pick_color": "Pick a Color",
+  "select": "Select",
+  "logo_low_ec_warning": "Using a logo with Low error correction may make the QR code unreadable. Consider using Medium or higher.",
+  "create_folder": "Create Folder",
+  "folder_name": "Folder Name",
+  "folder_name_hint": "e.g. WiFi, Products",
+  "move_to_folder": "Move to Folder",
+  "no_folder": "No Folder (Root)",
+  "code_moved": "Code moved successfully"
 }

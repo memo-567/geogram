@@ -9,11 +9,13 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:qr_flutter/qr_flutter.dart' hide QrCode;
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../models/qr_code.dart';
 import '../services/i18n_service.dart';
 import '../services/qr_code_service.dart';
+import 'qr_generator_page.dart';
 
 /// Page for viewing and editing QR code details
 class QrDetailPage extends StatefulWidget {
@@ -130,12 +132,88 @@ class _QrDetailPageState extends State<QrDetailPage> {
     }
   }
 
+  Future<void> _showMoveToFolderDialog() async {
+    final folders = await _qrService.getSubfolders(_code.source);
+
+    if (!mounted) return;
+
+    final result = await showDialog<String?>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('move_to_folder')),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // "No folder" option (root)
+              ListTile(
+                leading: const Icon(Icons.folder_off),
+                title: Text(_i18n.t('no_folder')),
+                selected: _code.category == null,
+                onTap: () => Navigator.pop(context, ''),
+              ),
+              // Existing folders
+              ...folders.map((folder) => ListTile(
+                    leading: const Icon(Icons.folder),
+                    title: Text(folder),
+                    selected: _code.category == folder,
+                    onTap: () => Navigator.pop(context, folder),
+                  )),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (result != null) {
+      final targetFolder = result.isEmpty ? null : result;
+      if (targetFolder != _code.category) {
+        final movedCode = await _qrService.moveQrCode(_code, targetFolder);
+        setState(() {
+          _code = movedCode;
+        });
+        widget.onUpdated?.call();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(_i18n.t('code_moved'))),
+          );
+        }
+      }
+    }
+  }
+
   Future<void> _copyContent() async {
     await Clipboard.setData(ClipboardData(text: _code.content));
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(_i18n.t('copied_to_clipboard', params: ['Content']))),
       );
+    }
+  }
+
+  Future<void> _openGeneratorForEdit() async {
+    final result = await Navigator.push<QrCode>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => QrGeneratorPage(editCode: _code),
+      ),
+    );
+
+    if (result != null) {
+      // Update the code with the edited version
+      final updated = await _qrService.updateQrCode(result);
+      setState(() {
+        _code = updated;
+        _nameController.text = updated.name;
+        _notesController.text = updated.notes ?? '';
+        _tagsController.text = updated.tags.join(', ');
+      });
+      widget.onUpdated?.call();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_i18n.t('saved'))),
+        );
+      }
     }
   }
 
@@ -227,7 +305,9 @@ class _QrDetailPageState extends State<QrDetailPage> {
           else ...[
             IconButton(
               icon: const Icon(Icons.edit),
-              onPressed: () => setState(() => _isEditing = true),
+              onPressed: _code.source == QrCodeSource.scanned
+                  ? _openGeneratorForEdit
+                  : () => setState(() => _isEditing = true),
               tooltip: _i18n.t('edit'),
             ),
             IconButton(
@@ -241,6 +321,9 @@ class _QrDetailPageState extends State<QrDetailPage> {
                   case 'copy':
                     _copyContent();
                     break;
+                  case 'move':
+                    _showMoveToFolderDialog();
+                    break;
                   case 'delete':
                     _deleteCode();
                     break;
@@ -252,6 +335,17 @@ class _QrDetailPageState extends State<QrDetailPage> {
                   child: ListTile(
                     leading: const Icon(Icons.copy),
                     title: Text(_i18n.t('copy_content')),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'move',
+                  child: ListTile(
+                    leading: const Icon(Icons.drive_file_move),
+                    title: Text(_i18n.t('move_to_folder')),
+                    subtitle: _code.category != null
+                        ? Text(_code.category!)
+                        : Text(_i18n.t('no_folder')),
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),
@@ -309,6 +403,32 @@ class _QrDetailPageState extends State<QrDetailPage> {
   }
 
   Widget _buildCodeImage() {
+    // For scanned 2D codes, generate a live QR code so other users can scan it
+    if (_code.source == QrCodeSource.scanned && _code.format.is2D) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.1),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: QrImageView(
+          data: _code.content,
+          version: QrVersions.auto,
+          size: 200,
+          backgroundColor: Colors.white,
+          padding: const EdgeInsets.all(8),
+        ),
+      );
+    }
+
+    // For created codes, decode base64 image (preserves custom colors/logos)
     try {
       if (_code.image.startsWith('data:image/')) {
         final base64Start = _code.image.indexOf(',') + 1;
@@ -340,6 +460,7 @@ class _QrDetailPageState extends State<QrDetailPage> {
       // Fall through to placeholder
     }
 
+    // Placeholder for barcodes and failed images
     return Container(
       width: 200,
       height: 200,
