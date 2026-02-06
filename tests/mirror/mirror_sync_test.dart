@@ -516,6 +516,7 @@ class SyncClient {
         if (entity is File) {
           final relative = entity.path.substring(localDir.length + 1);
           if (relative.startsWith('.')) continue;
+          if (relative == 'log' || relative.startsWith('log/')) continue;
           if (_isIgnored(relative, ignorePatterns)) continue;
           localFileSet.add(relative);
         }
@@ -529,6 +530,7 @@ class SyncClient {
       final remoteSize = remote['size'] as int;
       final remoteMtime = remote['mtime'] as int;
 
+      if (remotePath == 'log' || remotePath.startsWith('log/')) continue;
       if (_isIgnored(remotePath, ignorePatterns)) continue;
       localFileSet.remove(remotePath);
 
@@ -1072,6 +1074,26 @@ void main() async {
     check('cache/data.bin not synced', !File('$dstBlog/cache/data.bin').existsSync());
     // dest_temp.tmp should NOT be uploaded to source
     check('dest_temp.tmp not uploaded', !File('${srcDir.path}/blog/dest_temp.tmp').existsSync());
+
+    // ── Test 15: Log folder always excluded ────────────────────
+
+    section('TEST 15: Log Folder Always Excluded');
+
+    // Create log files on both source and dest
+    Directory('${srcDir.path}/blog/log').createSync();
+    File('${srcDir.path}/blog/log/sync.log')
+        .writeAsStringSync('source log entry');
+    Directory('$dstBlog/log').createSync();
+    File('$dstBlog/log/local.log')
+        .writeAsStringSync('dest log entry');
+
+    final result15 = await client.syncFolder(server.url, 'blog', syncStyle: 'sendReceive');
+
+    check('Sync succeeded', result15.success, result15.error);
+    // Source log should NOT appear on dest (even though server manifest includes it)
+    check('log/sync.log not synced to dest', !File('$dstBlog/log/sync.log').existsSync());
+    // Dest log should NOT be uploaded to source
+    check('log/local.log not uploaded to source', !File('${srcDir.path}/blog/log/local.log').existsSync());
 
   } finally {
     await server.stop();

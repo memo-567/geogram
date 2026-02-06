@@ -584,8 +584,9 @@ class MirrorSyncService {
       if (entity is File) {
         final relativePath = path.relative(entity.path, from: folderPath);
 
-        // Skip hidden files and system files
+        // Skip hidden files, system files, and log folder
         if (relativePath.startsWith('.')) continue;
+        if (relativePath == 'log' || relativePath.startsWith('log/')) continue;
 
         try {
           final bytes = await entity.readAsBytes();
@@ -811,6 +812,7 @@ class MirrorSyncService {
         if (entity is File) {
           final relativePath = path.relative(entity.path, from: localPath);
           if (relativePath.startsWith('.')) continue;
+          if (relativePath == 'log' || relativePath.startsWith('log/')) continue;
           if (isIgnored(relativePath, ignorePatterns)) continue;
           final stat = await entity.stat();
           final bytes = await entity.readAsBytes();
@@ -826,6 +828,7 @@ class MirrorSyncService {
 
     // Check remote files against local
     for (final remoteFile in remote.files) {
+      if (remoteFile.path == 'log' || remoteFile.path.startsWith('log/')) continue;
       if (isIgnored(remoteFile.path, ignorePatterns)) continue;
 
       final local = localFiles.remove(remoteFile.path);
