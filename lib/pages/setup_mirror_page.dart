@@ -8,7 +8,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
-import '../services/profile_service.dart';
 
 /// Passive mirror setup page — shows this device's IP address
 /// so the other device can add it via Settings > Mirror > Add Device.
@@ -65,7 +64,6 @@ class _SetupMirrorPageState extends State<SetupMirrorPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final callsign = ProfileService().getProfile().callsign;
 
     return Scaffold(
       appBar: AppBar(
@@ -94,17 +92,19 @@ class _SetupMirrorPageState extends State<SetupMirrorPage> {
                   const SizedBox(height: 24),
                   // Title
                   Text(
-                    _i18n.tOrDefault('setup_mirror_title', 'Ready to Mirror'),
+                    _i18n.tOrDefault('setup_mirror_title', 'Become a Mirror'),
                     style: theme.textTheme.headlineSmall?.copyWith(
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  // Current profile callsign
+                  const SizedBox(height: 12),
+                  // Description
                   Text(
                     _i18n.tOrDefault(
-                        'setup_mirror_callsign', 'Profile: {0}',
-                        params: [callsign]),
+                      'setup_mirror_description',
+                      'This device will become a mirror of another existing device, keeping the same profile and data in sync between both.',
+                    ),
+                    textAlign: TextAlign.center,
                     style: theme.textTheme.bodyLarge?.copyWith(
                       color: theme.colorScheme.outline,
                     ),
