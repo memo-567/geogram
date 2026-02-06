@@ -32,7 +32,9 @@ class ImportExportProfilesDialog extends StatelessWidget {
         children: [
           const Icon(Icons.import_export),
           const SizedBox(width: 12),
-          Text(i18n.t('import_export_profiles')),
+          Expanded(
+            child: Text(i18n.t('import_export_profiles')),
+          ),
         ],
       ),
       content: SizedBox(
