@@ -698,12 +698,17 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
       if (_navigatorKey.currentContext == null) return;
       showDialog(
         context: _navigatorKey.currentContext!,
+        barrierDismissible: false,
         builder: (context) => AlertDialog(
           title: const Text('Mirror Active'),
-          content: Text('You are a mirror with ${event.peerCallsign}'),
+          content: Text('You are now a mirror with ${event.peerCallsign}'),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context),
+              onPressed: () {
+                Navigator.pop(context); // close dialog
+                // Pop back to main UI
+                _navigatorKey.currentState?.popUntil((route) => route.isFirst);
+              },
               child: const Text('OK'),
             ),
           ],
