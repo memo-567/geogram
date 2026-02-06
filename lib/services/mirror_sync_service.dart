@@ -971,6 +971,7 @@ class MirrorSyncService {
   Future<SyncResult> syncFolder(
     String peerUrl,
     String folder, {
+    required String peerCallsign,
     bool deleteLocalOnly = false,
     SyncStyle syncStyle = SyncStyle.receiveOnly,
     List<String> ignorePatterns = const [],
@@ -999,11 +1000,12 @@ class MirrorSyncService {
         return SyncResult.failure('Failed to fetch manifest');
       }
 
-      // 3. Determine local path
-      final basePath = StorageConfig().baseDir;
-      final localPath = '$basePath/$folder';
+      // 3. Determine local path (under the peer's callsign directory)
+      final callsignDir = StorageConfig().getCallsignDir(peerCallsign);
+      final localPath = '$callsignDir/$folder';
 
-      // Ensure local directory exists
+      // Ensure callsign and local directories exist
+      await Directory(callsignDir).create(recursive: true);
       await Directory(localPath).create(recursive: true);
 
       // 4. Diff manifest

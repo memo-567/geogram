@@ -847,6 +847,7 @@ class DebugController {
         'params': {
           'peer_url': 'Peer HTTP URL, e.g., http://192.168.1.100:3456 (required)',
           'folder': 'Folder path to sync, e.g., collections/blog (required)',
+          'peer_callsign': 'Peer callsign, e.g., X1ABC (required)',
         },
       },
       {

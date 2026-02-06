@@ -1089,6 +1089,7 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
             await syncService.syncFolder(
               peerUrl,
               appId,
+              peerCallsign: remoteCallsign,
               syncStyle: style,
               ignorePatterns: appConfig?.ignorePatterns ?? const [],
             );

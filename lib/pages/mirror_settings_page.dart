@@ -625,6 +625,7 @@ class _MirrorSettingsPageState extends State<MirrorSettingsPage> {
           final result = await syncService.syncFolder(
             peerUrl,
             appId,
+            peerCallsign: peer.callsign,
             syncStyle: style,
             ignorePatterns: appConfig.ignorePatterns,
           );
@@ -1150,6 +1151,7 @@ class _PeerSettingsPageState extends State<PeerSettingsPage> {
         final result = await syncService.syncFolder(
           peerUrl,
           appId,
+          peerCallsign: _peer.callsign,
           syncStyle: style,
           ignorePatterns: appConfig.ignorePatterns,
         );

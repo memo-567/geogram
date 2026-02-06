@@ -429,6 +429,7 @@ class SyncClient {
   Future<SyncResult> syncFolder(
     String peerUrl,
     String folder, {
+    required String peerCallsign,
     String syncStyle = 'receiveOnly',
     List<String> ignorePatterns = const [],
   }) async {
@@ -502,8 +503,10 @@ class SyncClient {
       remoteMap[rf['path'] as String] = rf;
     }
 
-    // 5. Diff against local
-    final localDir = '$destDir/$folder';
+    // 5. Diff against local (under the peer's callsign directory)
+    final callsignDir = '$destDir/devices/$peerCallsign';
+    final localDir = '$callsignDir/$folder';
+    await Directory(callsignDir).create(recursive: true);
     await Directory(localDir).create(recursive: true);
 
     // Track local files for detecting local-only files
@@ -709,20 +712,25 @@ void main() async {
   srcDir.createSync(recursive: true);
   dstDir.createSync(recursive: true);
 
+  // Source callsign directory (simulates devices/X1SRC/ on the server)
+  final srcCallsignDir = Directory('${srcDir.path}/devices/X1SRC');
+  srcCallsignDir.createSync(recursive: true);
+
   print('\nSource dir: ${srcDir.path}');
+  print('Source callsign dir: ${srcCallsignDir.path}');
   print('Dest dir:   ${dstDir.path}');
 
-  // Create test files in source
-  Directory('${srcDir.path}/blog').createSync();
-  File('${srcDir.path}/blog/post1.json')
+  // Create test files in source under the callsign directory
+  Directory('${srcCallsignDir.path}/blog').createSync();
+  File('${srcCallsignDir.path}/blog/post1.json')
       .writeAsStringSync('{"title":"First Post","body":"Hello world"}');
-  File('${srcDir.path}/blog/post2.json')
+  File('${srcCallsignDir.path}/blog/post2.json')
       .writeAsStringSync('{"title":"Second Post","body":"Another entry"}');
-  Directory('${srcDir.path}/blog/drafts').createSync();
-  File('${srcDir.path}/blog/drafts/draft1.json')
+  Directory('${srcCallsignDir.path}/blog/drafts').createSync();
+  File('${srcCallsignDir.path}/blog/drafts/draft1.json')
       .writeAsStringSync('{"title":"Draft","body":"Work in progress"}');
 
-  print('Created 3 test files in source/blog/');
+  print('Created 3 test files in source/devices/X1SRC/blog/');
 
   // Generate a NOSTR key pair for the test client
   final keys = NostrCrypto.generateKeyPair();
@@ -733,8 +741,8 @@ void main() async {
   // Create sync client
   final client = SyncClient(nsec: nsec, npub: npub, destDir: dstDir.path);
 
-  // Start mock source server
-  final server = MockSourceServer(srcDir.path);
+  // Start mock source server (pointing at the callsign dir, like the real server does)
+  final server = MockSourceServer(srcCallsignDir.path);
   await server.start();
   server.allowedPeers[npub] = 'X1TEST';
   print('Source server on port ${server.port}, client registered as allowed peer\n');
@@ -744,7 +752,7 @@ void main() async {
 
     section('TEST 1: Initial Sync (empty destination)');
 
-    final result1 = await client.syncFolder(server.url, 'blog');
+    final result1 = await client.syncFolder(server.url, 'blog', peerCallsign: 'X1SRC');
 
     check('Sync succeeded', result1.success, result1.error);
     check('3 files added', result1.filesAdded == 3,
@@ -759,7 +767,7 @@ void main() async {
 
     section('TEST 2: Verify Files on Disk (SHA1 integrity)');
 
-    final dstBlog = '${dstDir.path}/blog';
+    final dstBlog = '${dstDir.path}/devices/X1SRC/blog';
 
     check('post1.json exists', File('$dstBlog/post1.json').existsSync());
     check('post2.json exists', File('$dstBlog/post2.json').existsSync());
@@ -768,15 +776,15 @@ void main() async {
 
     if (File('$dstBlog/post1.json').existsSync()) {
       check('post1.json SHA1 matches',
-          fileSha1('${srcDir.path}/blog/post1.json') == fileSha1('$dstBlog/post1.json'));
+          fileSha1('${srcCallsignDir.path}/blog/post1.json') == fileSha1('$dstBlog/post1.json'));
     }
     if (File('$dstBlog/post2.json').existsSync()) {
       check('post2.json SHA1 matches',
-          fileSha1('${srcDir.path}/blog/post2.json') == fileSha1('$dstBlog/post2.json'));
+          fileSha1('${srcCallsignDir.path}/blog/post2.json') == fileSha1('$dstBlog/post2.json'));
     }
     if (File('$dstBlog/drafts/draft1.json').existsSync()) {
       check('drafts/draft1.json SHA1 matches',
-          fileSha1('${srcDir.path}/blog/drafts/draft1.json') == fileSha1('$dstBlog/drafts/draft1.json'));
+          fileSha1('${srcCallsignDir.path}/blog/drafts/draft1.json') == fileSha1('$dstBlog/drafts/draft1.json'));
     }
 
     // Verify actual content
@@ -788,7 +796,7 @@ void main() async {
 
     section('TEST 3: No-op Sync (no changes)');
 
-    final result2 = await client.syncFolder(server.url, 'blog');
+    final result2 = await client.syncFolder(server.url, 'blog', peerCallsign: 'X1SRC');
 
     check('Sync succeeded', result2.success, result2.error);
     check('0 total changes', result2.totalChanges == 0,
@@ -798,10 +806,10 @@ void main() async {
 
     section('TEST 4: Update Sync (modify source file)');
 
-    File('${srcDir.path}/blog/post1.json')
+    File('${srcCallsignDir.path}/blog/post1.json')
         .writeAsStringSync('{"title":"First Post UPDATED","body":"Modified content"}');
 
-    final result3 = await client.syncFolder(server.url, 'blog');
+    final result3 = await client.syncFolder(server.url, 'blog', peerCallsign: 'X1SRC');
 
     check('Sync succeeded', result3.success, result3.error);
     check('1 file modified', result3.filesModified == 1, 'got ${result3.filesModified}');
@@ -810,16 +818,16 @@ void main() async {
     final updated = File('$dstBlog/post1.json').readAsStringSync();
     check('Dest has updated content', updated.contains('UPDATED'), 'content: $updated');
     check('Updated SHA1 matches',
-        fileSha1('${srcDir.path}/blog/post1.json') == fileSha1('$dstBlog/post1.json'));
+        fileSha1('${srcCallsignDir.path}/blog/post1.json') == fileSha1('$dstBlog/post1.json'));
 
     // ── Test 5: New file sync ──────────────────────────────────
 
     section('TEST 5: New File Sync (add source file)');
 
-    File('${srcDir.path}/blog/post3.json')
+    File('${srcCallsignDir.path}/blog/post3.json')
         .writeAsStringSync('{"title":"Third Post","body":"Brand new"}');
 
-    final result4 = await client.syncFolder(server.url, 'blog');
+    final result4 = await client.syncFolder(server.url, 'blog', peerCallsign: 'X1SRC');
 
     check('Sync succeeded', result4.success, result4.error);
     check('1 file added', result4.filesAdded == 1, 'got ${result4.filesAdded}');
@@ -838,10 +846,10 @@ void main() async {
         .writeAsStringSync('{"title":"LOCAL CHANGE","body":"Should be overwritten"}');
 
     final localHash = fileSha1('$dstBlog/post1.json');
-    final sourceHash = fileSha1('${srcDir.path}/blog/post1.json');
+    final sourceHash = fileSha1('${srcCallsignDir.path}/blog/post1.json');
     check('Local and source differ before sync', localHash != sourceHash);
 
-    final result5 = await client.syncFolder(server.url, 'blog');
+    final result5 = await client.syncFolder(server.url, 'blog', peerCallsign: 'X1SRC');
 
     check('Sync succeeded', result5.success, result5.error);
     check('1 file modified (overwritten)', result5.filesModified == 1, 'got ${result5.filesModified}');
@@ -987,13 +995,13 @@ void main() async {
     final futureTime = DateTime.now().add(const Duration(seconds: 10));
     destPost1.setLastModifiedSync(futureTime);
 
-    final result11 = await client.syncFolder(server.url, 'blog', syncStyle: 'sendReceive');
+    final result11 = await client.syncFolder(server.url, 'blog', peerCallsign: 'X1SRC', syncStyle: 'sendReceive');
 
     check('Sync succeeded', result11.success, result11.error);
     check('1 file uploaded (local newer)', result11.filesUploaded >= 1,
         'uploaded=${result11.filesUploaded}');
     // Source should now have dest's content
-    final srcPost1Content = File('${srcDir.path}/blog/post1.json').readAsStringSync();
+    final srcPost1Content = File('${srcCallsignDir.path}/blog/post1.json').readAsStringSync();
     check('Source received dest content', srcPost1Content.contains('DEST NEWER'),
         'source content: $srcPost1Content');
 
@@ -1002,7 +1010,7 @@ void main() async {
     section('TEST 12: Bidirectional — Remote Newer Wins (sendReceive)');
 
     // Modify source file and set its mtime to the future
-    final srcPost2 = File('${srcDir.path}/blog/post2.json');
+    final srcPost2 = File('${srcCallsignDir.path}/blog/post2.json');
     srcPost2.writeAsStringSync('{"title":"SOURCE NEWER","body":"Remote edit wins"}');
     final futureTime2 = DateTime.now().add(const Duration(seconds: 20));
     srcPost2.setLastModifiedSync(futureTime2);
@@ -1011,7 +1019,7 @@ void main() async {
     final pastTime = DateTime.now().subtract(const Duration(seconds: 60));
     destPost2.setLastModifiedSync(pastTime);
 
-    final result12 = await client.syncFolder(server.url, 'blog', syncStyle: 'sendReceive');
+    final result12 = await client.syncFolder(server.url, 'blog', peerCallsign: 'X1SRC', syncStyle: 'sendReceive');
 
     check('Sync succeeded', result12.success, result12.error);
     check('1 file modified (remote newer)', result12.filesModified >= 1,
@@ -1028,15 +1036,15 @@ void main() async {
     File('$dstBlog/local_only.json')
         .writeAsStringSync('{"title":"Local Only","body":"Should appear on source"}');
 
-    final result13 = await client.syncFolder(server.url, 'blog', syncStyle: 'sendReceive');
+    final result13 = await client.syncFolder(server.url, 'blog', peerCallsign: 'X1SRC', syncStyle: 'sendReceive');
 
     check('Sync succeeded', result13.success, result13.error);
     check('1 file uploaded (local-only)', result13.filesUploaded >= 1,
         'uploaded=${result13.filesUploaded}');
     check('Source has local_only.json',
-        File('${srcDir.path}/blog/local_only.json').existsSync());
-    if (File('${srcDir.path}/blog/local_only.json').existsSync()) {
-      final srcContent = File('${srcDir.path}/blog/local_only.json').readAsStringSync();
+        File('${srcCallsignDir.path}/blog/local_only.json').existsSync());
+    if (File('${srcCallsignDir.path}/blog/local_only.json').existsSync()) {
+      final srcContent = File('${srcCallsignDir.path}/blog/local_only.json').readAsStringSync();
       check('Source has correct content', srcContent.contains('Local Only'),
           'content: $srcContent');
     }
@@ -1046,12 +1054,12 @@ void main() async {
     section('TEST 14: Ignore Patterns');
 
     // Create files that should be ignored
-    File('${srcDir.path}/blog/temp.tmp')
+    File('${srcCallsignDir.path}/blog/temp.tmp')
         .writeAsStringSync('temp file');
-    Directory('${srcDir.path}/blog/cache').createSync();
-    File('${srcDir.path}/blog/cache/data.bin')
+    Directory('${srcCallsignDir.path}/blog/cache').createSync();
+    File('${srcCallsignDir.path}/blog/cache/data.bin')
         .writeAsStringSync('cached data');
-    File('${srcDir.path}/blog/important.json')
+    File('${srcCallsignDir.path}/blog/important.json')
         .writeAsStringSync('{"title":"Important","body":"Should sync"}');
 
     // Also create matching files on dest to test ignore on local scan
@@ -1061,6 +1069,7 @@ void main() async {
     final result14 = await client.syncFolder(
       server.url,
       'blog',
+      peerCallsign: 'X1SRC',
       syncStyle: 'sendReceive',
       ignorePatterns: ['*.tmp', 'cache/*'],
     );
@@ -1073,27 +1082,27 @@ void main() async {
     // cache/data.bin should NOT be synced to dest
     check('cache/data.bin not synced', !File('$dstBlog/cache/data.bin').existsSync());
     // dest_temp.tmp should NOT be uploaded to source
-    check('dest_temp.tmp not uploaded', !File('${srcDir.path}/blog/dest_temp.tmp').existsSync());
+    check('dest_temp.tmp not uploaded', !File('${srcCallsignDir.path}/blog/dest_temp.tmp').existsSync());
 
     // ── Test 15: Log folder always excluded ────────────────────
 
     section('TEST 15: Log Folder Always Excluded');
 
     // Create log files on both source and dest
-    Directory('${srcDir.path}/blog/log').createSync();
-    File('${srcDir.path}/blog/log/sync.log')
+    Directory('${srcCallsignDir.path}/blog/log').createSync();
+    File('${srcCallsignDir.path}/blog/log/sync.log')
         .writeAsStringSync('source log entry');
     Directory('$dstBlog/log').createSync();
     File('$dstBlog/log/local.log')
         .writeAsStringSync('dest log entry');
 
-    final result15 = await client.syncFolder(server.url, 'blog', syncStyle: 'sendReceive');
+    final result15 = await client.syncFolder(server.url, 'blog', peerCallsign: 'X1SRC', syncStyle: 'sendReceive');
 
     check('Sync succeeded', result15.success, result15.error);
     // Source log should NOT appear on dest (even though server manifest includes it)
     check('log/sync.log not synced to dest', !File('$dstBlog/log/sync.log').existsSync());
     // Dest log should NOT be uploaded to source
-    check('log/local.log not uploaded to source', !File('${srcDir.path}/blog/log/local.log').existsSync());
+    check('log/local.log not uploaded to source', !File('${srcCallsignDir.path}/blog/log/local.log').existsSync());
 
   } finally {
     await server.stop();

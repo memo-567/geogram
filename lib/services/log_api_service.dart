@@ -13125,8 +13125,9 @@ ul, ol { margin-left: 30px; padding: 0; }
       }
 
       // Check if folder exists before generating challenge
-      final basePath = StorageConfig().baseDir;
-      final folderPath = '$basePath/$folder';
+      final callsign = ProfileService().getProfile().callsign;
+      final callsignDir = StorageConfig().getCallsignDir(callsign);
+      final folderPath = '$callsignDir/$folder';
 
       final dir = io.Directory(folderPath);
       if (!await dir.exists()) {
@@ -13321,8 +13322,9 @@ ul, ol { margin-left: 30px; padding: 0; }
       }
 
       // Generate manifest
-      final basePath = StorageConfig().baseDir;
-      final folderPath = '$basePath/$folder';
+      final callsign = ProfileService().getProfile().callsign;
+      final callsignDir = StorageConfig().getCallsignDir(callsign);
+      final folderPath = '$callsignDir/$folder';
 
       final dir = io.Directory(folderPath);
       if (!await dir.exists()) {
@@ -13410,8 +13412,9 @@ ul, ol { margin-left: 30px; padding: 0; }
       }
 
       // Construct full path
-      final basePath = StorageConfig().baseDir;
-      final folderPath = '$basePath/$folder';
+      final callsign = ProfileService().getProfile().callsign;
+      final callsignDir = StorageConfig().getCallsignDir(callsign);
+      final folderPath = '$callsignDir/$folder';
       final fullPath = '$folderPath/$filePath';
 
       // Security: Ensure path doesn't escape folder
@@ -13555,8 +13558,9 @@ ul, ol { margin-left: 30px; padding: 0; }
       }
 
       // Construct full path
-      final basePath = StorageConfig().baseDir;
-      final folderPath = '$basePath/$folder';
+      final callsign = ProfileService().getProfile().callsign;
+      final callsignDir = StorageConfig().getCallsignDir(callsign);
+      final folderPath = '$callsignDir/$folder';
       final fullPath = '$folderPath/$filePath';
 
       // Security: Ensure path doesn't escape folder
@@ -14278,6 +14282,7 @@ ul, ol { margin-left: 30px; padding: 0; }
         case 'mirror_request_sync':
           final peerUrl = params['peer_url'] as String?;
           final folder = params['folder'] as String?;
+          final peerCallsign = params['peer_callsign'] as String?;
 
           if (peerUrl == null || peerUrl.isEmpty) {
             return shelf.Response.badRequest(
@@ -14299,8 +14304,18 @@ ul, ol { margin-left: 30px; padding: 0; }
             );
           }
 
+          if (peerCallsign == null || peerCallsign.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing peer_callsign parameter',
+              }),
+              headers: headers,
+            );
+          }
+
           // Perform sync
-          final result = await mirrorService.syncFolder(peerUrl, folder);
+          final result = await mirrorService.syncFolder(peerUrl, folder, peerCallsign: peerCallsign);
 
           return shelf.Response.ok(
             jsonEncode({
