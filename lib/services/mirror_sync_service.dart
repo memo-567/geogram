@@ -23,6 +23,7 @@ import '../util/nostr_crypto.dart';
 import 'log_service.dart';
 import 'mirror_config_service.dart';
 import 'profile_service.dart';
+import 'profile_storage.dart';
 import 'storage_config.dart';
 import '../models/mirror_config.dart';
 
@@ -570,40 +571,81 @@ class MirrorSyncService {
   }
 
   /// Generate manifest for a folder
-  Future<MirrorManifest> generateManifest(String folderPath) async {
+  Future<MirrorManifest> generateManifest(
+    String folderPath, {
+    ProfileStorage? storage,
+  }) async {
     final files = <MirrorFileEntry>[];
     var totalBytes = 0;
+    final folder = path.basename(folderPath);
 
-    final dir = Directory(folderPath);
-    if (!await dir.exists()) {
-      throw StateError('Folder does not exist: $folderPath');
-    }
+    if (storage != null) {
+      // Use ProfileStorage (works with both encrypted and filesystem)
+      final exists = await storage.directoryExists(folder);
+      if (!exists) {
+        throw StateError('Folder does not exist: $folder');
+      }
 
-    // Recursively scan all files
-    await for (final entity in dir.list(recursive: true)) {
-      if (entity is File) {
-        final relativePath = path.relative(entity.path, from: folderPath);
+      final entries = await storage.listDirectory(folder, recursive: true);
+      for (final entry in entries) {
+        if (entry.isDirectory) continue;
+        // entry.path is relative to storage base, e.g. "blog-xxx/2024/post.md"
+        // We need path relative to the folder
+        final fullRelPath = entry.path;
+        final relativePath = fullRelPath.startsWith('$folder/')
+            ? fullRelPath.substring(folder.length + 1)
+            : fullRelPath;
 
-        // Skip hidden files, system files, and log folder
         if (relativePath.startsWith('.')) continue;
         if (relativePath == 'log' || relativePath.startsWith('log/')) continue;
 
         try {
-          final bytes = await entity.readAsBytes();
+          final bytes = await storage.readBytes(fullRelPath);
+          if (bytes == null) continue;
           final sha1Hash = sha1.convert(bytes).toString();
-          final stat = await entity.stat();
 
           files.add(MirrorFileEntry(
             path: relativePath,
             sha1: sha1Hash,
-            mtime: stat.modified.millisecondsSinceEpoch ~/ 1000,
+            mtime: (entry.modified?.millisecondsSinceEpoch ?? 0) ~/ 1000,
             size: bytes.length,
           ));
 
           totalBytes += bytes.length;
         } catch (e) {
-          LogService()
-              .log('MirrorSync: Error reading file $relativePath: $e');
+          LogService().log('MirrorSync: Error reading file $relativePath: $e');
+        }
+      }
+    } else {
+      // Fallback: raw filesystem
+      final dir = Directory(folderPath);
+      if (!await dir.exists()) {
+        throw StateError('Folder does not exist: $folderPath');
+      }
+
+      await for (final entity in dir.list(recursive: true)) {
+        if (entity is File) {
+          final relativePath = path.relative(entity.path, from: folderPath);
+
+          if (relativePath.startsWith('.')) continue;
+          if (relativePath == 'log' || relativePath.startsWith('log/')) continue;
+
+          try {
+            final bytes = await entity.readAsBytes();
+            final sha1Hash = sha1.convert(bytes).toString();
+            final stat = await entity.stat();
+
+            files.add(MirrorFileEntry(
+              path: relativePath,
+              sha1: sha1Hash,
+              mtime: stat.modified.millisecondsSinceEpoch ~/ 1000,
+              size: bytes.length,
+            ));
+
+            totalBytes += bytes.length;
+          } catch (e) {
+            LogService().log('MirrorSync: Error reading file $relativePath: $e');
+          }
         }
       }
     }
@@ -612,7 +654,7 @@ class MirrorSyncService {
     files.sort((a, b) => a.path.compareTo(b.path));
 
     return MirrorManifest(
-      folder: path.basename(folderPath),
+      folder: folder,
       totalFiles: files.length,
       totalBytes: totalBytes,
       files: files,
@@ -622,7 +664,20 @@ class MirrorSyncService {
 
   /// Read a file for sync (returns bytes and SHA1)
   Future<({Uint8List bytes, String sha1})> readFile(
-      String folderPath, String relativePath) async {
+    String folderPath,
+    String relativePath, {
+    ProfileStorage? storage,
+  }) async {
+    if (storage != null) {
+      final folder = path.basename(folderPath);
+      final bytes = await storage.readBytes('$folder/$relativePath');
+      if (bytes == null) {
+        throw StateError('File not found: $relativePath');
+      }
+      final sha1Hash = sha1.convert(bytes).toString();
+      return (bytes: bytes, sha1: sha1Hash);
+    }
+
     final filePath = '$folderPath/$relativePath';
     final file = File(filePath);
 
@@ -801,27 +856,55 @@ class MirrorSyncService {
     bool deleteLocalOnly = false,
     SyncStyle syncStyle = SyncStyle.receiveOnly,
     List<String> ignorePatterns = const [],
+    ProfileStorage? storage,
   }) async {
     final changes = <FileChange>[];
     final localFiles = <String, ({int size, int mtime, String sha1})>{};
 
-    // Scan local folder
-    final localDir = Directory(localPath);
-    if (await localDir.exists()) {
-      await for (final entity in localDir.list(recursive: true)) {
-        if (entity is File) {
-          final relativePath = path.relative(entity.path, from: localPath);
+    if (storage != null) {
+      // Scan via ProfileStorage
+      final folder = path.basename(localPath);
+      final exists = await storage.directoryExists(folder);
+      if (exists) {
+        final entries = await storage.listDirectory(folder, recursive: true);
+        for (final entry in entries) {
+          if (entry.isDirectory) continue;
+          final fullRelPath = entry.path;
+          final relativePath = fullRelPath.startsWith('$folder/')
+              ? fullRelPath.substring(folder.length + 1)
+              : fullRelPath;
           if (relativePath.startsWith('.')) continue;
           if (relativePath == 'log' || relativePath.startsWith('log/')) continue;
           if (isIgnored(relativePath, ignorePatterns)) continue;
-          final stat = await entity.stat();
-          final bytes = await entity.readAsBytes();
+          final bytes = await storage.readBytes(fullRelPath);
+          if (bytes == null) continue;
           final hash = sha1.convert(bytes).toString();
           localFiles[relativePath] = (
-            size: stat.size,
-            mtime: stat.modified.millisecondsSinceEpoch ~/ 1000,
+            size: bytes.length,
+            mtime: (entry.modified?.millisecondsSinceEpoch ?? 0) ~/ 1000,
             sha1: hash,
           );
+        }
+      }
+    } else {
+      // Scan local folder via filesystem
+      final localDir = Directory(localPath);
+      if (await localDir.exists()) {
+        await for (final entity in localDir.list(recursive: true)) {
+          if (entity is File) {
+            final relativePath = path.relative(entity.path, from: localPath);
+            if (relativePath.startsWith('.')) continue;
+            if (relativePath == 'log' || relativePath.startsWith('log/')) continue;
+            if (isIgnored(relativePath, ignorePatterns)) continue;
+            final stat = await entity.stat();
+            final bytes = await entity.readAsBytes();
+            final hash = sha1.convert(bytes).toString();
+            localFiles[relativePath] = (
+              size: stat.size,
+              mtime: stat.modified.millisecondsSinceEpoch ~/ 1000,
+              sha1: hash,
+            );
+          }
         }
       }
     }
@@ -888,6 +971,7 @@ class MirrorSyncService {
     String localPath,
     String token, {
     String? expectedSha1,
+    ProfileStorage? storage,
   }) async {
     try {
       final url = Uri.parse(
@@ -914,9 +998,13 @@ class MirrorSyncService {
       }
 
       // Write file
-      final localFile = File('$localPath/$filePath');
-      await localFile.parent.create(recursive: true);
-      await localFile.writeAsBytes(bytes);
+      if (storage != null) {
+        await storage.writeBytes('$folder/$filePath', Uint8List.fromList(bytes));
+      } else {
+        final localFile = File('$localPath/$filePath');
+        await localFile.parent.create(recursive: true);
+        await localFile.writeAsBytes(bytes);
+      }
 
       return true;
     } catch (e) {
@@ -933,15 +1021,26 @@ class MirrorSyncService {
     String localPath,
     String token, {
     String? sha1Hash,
+    ProfileStorage? storage,
   }) async {
     try {
-      final localFile = File('$localPath/$filePath');
-      if (!await localFile.exists()) {
-        LogService().log('MirrorSync: Upload failed, file not found: $filePath');
-        return false;
+      Uint8List bytes;
+      if (storage != null) {
+        final data = await storage.readBytes('$folder/$filePath');
+        if (data == null) {
+          LogService().log('MirrorSync: Upload failed, file not found: $filePath');
+          return false;
+        }
+        bytes = data;
+      } else {
+        final localFile = File('$localPath/$filePath');
+        if (!await localFile.exists()) {
+          LogService().log('MirrorSync: Upload failed, file not found: $filePath');
+          return false;
+        }
+        bytes = await localFile.readAsBytes();
       }
 
-      final bytes = await localFile.readAsBytes();
       final hash = sha1Hash ?? sha1.convert(bytes).toString();
 
       final url = Uri.parse(
@@ -976,6 +1075,7 @@ class MirrorSyncService {
     SyncStyle syncStyle = SyncStyle.receiveOnly,
     List<String> ignorePatterns = const [],
     void Function(SyncStatus)? onProgress,
+    ProfileStorage? storage,
   }) async {
     final stopwatch = Stopwatch()..start();
     var filesAdded = 0;
@@ -1005,8 +1105,12 @@ class MirrorSyncService {
       final localPath = '$callsignDir/$folder';
 
       // Ensure callsign and local directories exist
-      await Directory(callsignDir).create(recursive: true);
-      await Directory(localPath).create(recursive: true);
+      if (storage != null) {
+        await storage.createDirectory(folder);
+      } else {
+        await Directory(callsignDir).create(recursive: true);
+        await Directory(localPath).create(recursive: true);
+      }
 
       // 4. Diff manifest
       final changes = await diffManifest(
@@ -1015,6 +1119,7 @@ class MirrorSyncService {
         deleteLocalOnly: deleteLocalOnly,
         syncStyle: syncStyle,
         ignorePatterns: ignorePatterns,
+        storage: storage,
       );
 
       if (changes.isEmpty) {
@@ -1056,6 +1161,7 @@ class MirrorSyncService {
               localPath,
               token,
               expectedSha1: change.remoteEntry?.sha1,
+              storage: storage,
             );
 
             if (success) {
@@ -1069,10 +1175,18 @@ class MirrorSyncService {
             break;
 
           case FileChangeType.delete:
-            final file = File('$localPath/${change.path}');
-            if (await file.exists()) {
-              await file.delete();
-              filesDeleted++;
+            if (storage != null) {
+              final exists = await storage.exists('$folder/${change.path}');
+              if (exists) {
+                await storage.delete('$folder/${change.path}');
+                filesDeleted++;
+              }
+            } else {
+              final file = File('$localPath/${change.path}');
+              if (await file.exists()) {
+                await file.delete();
+                filesDeleted++;
+              }
             }
             break;
 
@@ -1084,6 +1198,7 @@ class MirrorSyncService {
               localPath,
               token,
               sha1Hash: change.localEntry?.sha1,
+              storage: storage,
             );
 
             if (success) {

@@ -13334,9 +13334,17 @@ ul, ol { margin-left: 30px; padding: 0; }
       final callsign = ProfileService().getProfile().callsign;
       final callsignDir = StorageConfig().getCallsignDir(callsign);
       final folderPath = '$callsignDir/$folder';
+      final profileStorage = AppService().profileStorage;
 
-      final dir = io.Directory(folderPath);
-      if (!await dir.exists()) {
+      // Check if folder exists (either on disk or in encrypted storage)
+      bool folderExists;
+      if (profileStorage != null) {
+        folderExists = await profileStorage.directoryExists(folder);
+      } else {
+        folderExists = await io.Directory(folderPath).exists();
+      }
+
+      if (!folderExists) {
         return shelf.Response.notFound(
           jsonEncode({
             'success': false,
@@ -13347,7 +13355,10 @@ ul, ol { margin-left: 30px; padding: 0; }
         );
       }
 
-      final manifest = await mirrorService.generateManifest(folderPath);
+      final manifest = await mirrorService.generateManifest(
+        folderPath,
+        storage: profileStorage,
+      );
 
       return shelf.Response.ok(
         jsonEncode({
@@ -13440,20 +13451,38 @@ ul, ol { margin-left: 30px; padding: 0; }
         );
       }
 
-      final file = io.File(fullPath);
-      if (!await file.exists()) {
-        return shelf.Response.notFound(
-          jsonEncode({
-            'success': false,
-            'error': 'File not found',
-            'code': 'FILE_NOT_FOUND',
-          }),
-          headers: headers,
-        );
+      // Read file via ProfileStorage or filesystem
+      final profileStorage = AppService().profileStorage;
+      Uint8List bytes;
+      if (profileStorage != null) {
+        final data = await profileStorage.readBytes('$folder/$filePath');
+        if (data == null) {
+          return shelf.Response.notFound(
+            jsonEncode({
+              'success': false,
+              'error': 'File not found',
+              'code': 'FILE_NOT_FOUND',
+            }),
+            headers: headers,
+          );
+        }
+        bytes = data;
+      } else {
+        final file = io.File(fullPath);
+        if (!await file.exists()) {
+          return shelf.Response.notFound(
+            jsonEncode({
+              'success': false,
+              'error': 'File not found',
+              'code': 'FILE_NOT_FOUND',
+            }),
+            headers: headers,
+          );
+        }
+        bytes = await file.readAsBytes();
       }
 
-      // Read file and compute SHA1
-      final bytes = await file.readAsBytes();
+      // Compute SHA1
       final sha1Hash = sha1.convert(bytes).toString();
 
       // Determine content type
@@ -13606,10 +13635,15 @@ ul, ol { margin-left: 30px; padding: 0; }
         }
       }
 
-      // Write file
-      final file = io.File(fullPath);
-      await file.parent.create(recursive: true);
-      await file.writeAsBytes(bodyBytes);
+      // Write file via ProfileStorage or filesystem
+      final profileStorage = AppService().profileStorage;
+      if (profileStorage != null) {
+        await profileStorage.writeBytes('$folder/$filePath', bodyBytes);
+      } else {
+        final file = io.File(fullPath);
+        await file.parent.create(recursive: true);
+        await file.writeAsBytes(bodyBytes);
+      }
 
       return shelf.Response.ok(
         jsonEncode({

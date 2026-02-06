@@ -13,6 +13,7 @@ import 'package:uuid/uuid.dart';
 
 import '../models/mirror_config.dart';
 import '../services/mirror_config_service.dart';
+import '../services/app_service.dart';
 import '../services/mirror_sync_service.dart';
 import '../services/profile_service.dart';
 import '../services/log_service.dart';
@@ -1005,6 +1006,7 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
     }
 
     // 4. Initial sync — push local data to the new peer
+    final storage = AppService().profileStorage;
     for (final appId in selectedAppIds) {
       final style = _appStyles[appId] ?? SyncStyle.sendReceive;
       if (style != SyncStyle.paused) {
@@ -1016,6 +1018,7 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
             peerCallsign: remoteCallsign,
             syncStyle: style,
             ignorePatterns: appConfig?.ignorePatterns ?? const [],
+            storage: storage,
           );
         } catch (e) {
           LogService().log('MirrorWizard: Initial sync failed for $appId: $e');
