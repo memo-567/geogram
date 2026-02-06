@@ -423,32 +423,21 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Select Apps',
-                      style: theme.textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Choose which apps to synchronize and how.',
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.outline,
-                      ),
-                    ),
-                  ],
+              Text(
+                'Select Apps',
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
                 ),
               ),
-              const SizedBox(width: 12),
-              ElevatedButton(
-                onPressed: canProceed ? _nextStep : null,
-                child: const Text('Next'),
+              const SizedBox(height: 4),
+              Text(
+                'Choose which apps to synchronize and how.',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
               ),
             ],
           ),
