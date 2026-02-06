@@ -39,14 +39,33 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
 
   // Available apps to sync
   final List<_AppInfo> _availableApps = [
-    _AppInfo('blog', 'Blog', 'Posts, comments, and likes', Icons.article),
+    _AppInfo('www', 'Website', 'Personal website', Icons.language),
+    _AppInfo('blog', 'Blog', 'Articles and posts', Icons.article),
     _AppInfo('chat', 'Chat', 'Messages and conversations', Icons.chat),
-    _AppInfo('places', 'Places', 'Saved locations', Icons.place),
+    _AppInfo('email', 'Email', 'Decentralized email', Icons.email),
+    _AppInfo('forum', 'Forum', 'Threaded discussions', Icons.forum),
     _AppInfo('events', 'Events', 'Calendar events', Icons.event),
+    _AppInfo('alerts', 'Alerts', 'Notifications and alerts', Icons.campaign),
+    _AppInfo('places', 'Places', 'Saved locations', Icons.place),
     _AppInfo('contacts', 'Contacts', 'Contact list', Icons.contacts),
-    _AppInfo('tracker', 'Tracker', 'GPS tracks', Icons.route),
-    _AppInfo('shared_folder', 'Shared folder', 'Shared files', Icons.folder),
-    _AppInfo('files', 'Files', 'File explorer', Icons.snippet_folder),
+    _AppInfo('groups', 'Groups', 'People groups', Icons.groups),
+    _AppInfo('news', 'News', 'News and announcements', Icons.newspaper),
+    _AppInfo('postcards', 'Postcards', 'Digital postcards', Icons.mail),
+    _AppInfo('market', 'Market', 'Marketplace listings', Icons.store),
+    _AppInfo('documents', 'Documents', 'Document files', Icons.description),
+    _AppInfo('photos', 'Photos', 'Photo library', Icons.photo_library),
+    _AppInfo('inventory', 'Inventory', 'Item tracking', Icons.inventory_2),
+    _AppInfo('wallet', 'Wallet', 'Debts and payments', Icons.account_balance_wallet),
+    _AppInfo('backup', 'Backup', 'Encrypted backups', Icons.backup),
+    _AppInfo('tracker', 'Tracker', 'Health, fitness, and GPS tracks', Icons.track_changes),
+    _AppInfo('videos', 'Videos', 'Video library', Icons.video_library),
+    _AppInfo('reader', 'Reader', 'RSS feeds and e-books', Icons.menu_book),
+    _AppInfo('work', 'Work', 'Workspaces and documents', Icons.work),
+    _AppInfo('usenet', 'Usenet', 'Newsgroup discussions', Icons.forum),
+    _AppInfo('music', 'Music', 'Music library', Icons.library_music),
+    _AppInfo('stories', 'Stories', 'Visual stories', Icons.auto_stories),
+    _AppInfo('qr', 'QR Codes', 'QR codes and barcodes', Icons.qr_code_2),
+    _AppInfo('shared_folder', 'Shared Folder', 'Shared files', Icons.folder),
   ];
 
   @override
