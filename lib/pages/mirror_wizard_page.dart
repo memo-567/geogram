@@ -417,29 +417,50 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
 
   Widget _buildAppsStep() {
     final theme = Theme.of(context);
+    final canProceed = _selectedApps.values.any((v) => v);
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Select Apps',
-            style: theme.textTheme.headlineSmall?.copyWith(
-              fontWeight: FontWeight.bold,
-            ),
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Select Apps',
+                      style: theme.textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Choose which apps to synchronize and how.',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.outline,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              ElevatedButton(
+                onPressed: canProceed ? _nextStep : null,
+                child: const Text('Next'),
+              ),
+            ],
           ),
-          const SizedBox(height: 8),
-          Text(
-            'Choose which apps to synchronize and how.',
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: theme.colorScheme.outline,
-            ),
+        ),
+        const SizedBox(height: 16),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+            children: _availableApps.map((app) => _buildAppSelectTile(app)).toList(),
           ),
-          const SizedBox(height: 24),
-          ..._availableApps.map((app) => _buildAppSelectTile(app)),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
