@@ -18,6 +18,7 @@ import 'profile_page.dart';
 import 'station_dashboard_page.dart';
 import 'station_setup_root_page.dart';
 import 'new_profile_page.dart';
+import 'setup_mirror_page.dart';
 
 /// Page for managing multiple profiles
 class ProfileManagementPage extends StatefulWidget {
@@ -413,6 +414,13 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
     );
   }
 
+  void _setupMirror() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const SetupMirrorPage()),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -427,6 +435,9 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
                   case 'import_export':
                     _showImportExportDialog();
                     break;
+                  case 'setup_mirror':
+                    _setupMirror();
+                    break;
                 }
               },
               itemBuilder: (context) => [
@@ -437,6 +448,16 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
                       const Icon(Icons.import_export),
                       const SizedBox(width: 8),
                       Text(_i18n.t('import_export_profiles')),
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'setup_mirror',
+                  child: Row(
+                    children: [
+                      const Icon(Icons.sync_alt),
+                      const SizedBox(width: 8),
+                      Text(_i18n.tOrDefault('setup_mirror', 'Setup Mirror')),
                     ],
                   ),
                 ),

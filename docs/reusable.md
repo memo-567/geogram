@@ -7822,3 +7822,40 @@ onTriggerBackgroundDelivery?.call();
 - Background delivery via DMQueueService
 - Status updates via `DMMessageStatusChangedEvent`
 - Existing `isPending`/`isFailed` indicators in `MessageBubbleWidget`
+
+---
+
+### Local IP Address Detection
+
+**Pattern:** Get local WiFi/LAN IPv4 addresses for device-to-device communication.
+
+**Used in:** `lib/pages/station_dashboard_page.dart`, `lib/pages/setup_mirror_page.dart`
+
+```dart
+Future<List<String>> _getLocalIpAddresses() async {
+  final ips = <String>[];
+  try {
+    final interfaces = await NetworkInterface.list(
+      type: InternetAddressType.IPv4,
+      includeLoopback: false,
+    );
+    for (final interface in interfaces) {
+      for (final addr in interface.addresses) {
+        if (!addr.isLoopback && addr.address.startsWith('192.') ||
+            addr.address.startsWith('10.') ||
+            addr.address.startsWith('172.')) {
+          ips.add(addr.address);
+        }
+      }
+    }
+  } catch (e) {
+    LogService().log('Error getting local IPs: $e');
+  }
+  return ips;
+}
+```
+
+**Notes:**
+- Filters to private network ranges (192.x, 10.x, 172.x)
+- Requires `dart:io` — not available on web
+- Consider extracting to a shared utility if used in more places
