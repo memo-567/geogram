@@ -1324,21 +1324,12 @@ class _HomePageState extends State<HomePage> {
   /// Create default apps for first launch
   Future<void> _createDefaultApps() async {
     final appService = AppService();
-    final defaultTypes = [
-      'chat',
-      'blog',
-      'alerts',
-      'places',
-      'inventory',
-      'backup',
-      'transfer',
-    ];
 
     LogService().log(
       'Creating default apps. Path: ${appService.getDefaultAppsPath()}',
     );
 
-    for (final type in defaultTypes) {
+    for (final type in AppService.defaultAppTypes) {
       try {
         final title = _i18n.t('app_type_$type');
         LogService().log('Creating default app: $type (title: $title)');

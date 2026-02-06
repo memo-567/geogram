@@ -533,6 +533,34 @@ class TransferService {
     unawaited(_recordService.recordProgress(transfer));
   }
 
+  /// Archive a completed/failed transfer from external source (e.g., P2P)
+  /// This allows other services to persist transfers to history.
+  void archiveCompletedTransfer(Transfer transfer) {
+    _ensureInitialized();
+
+    if (transfer.status == TransferStatus.completed) {
+      _completedCache[transfer.id] = transfer;
+      _storage.archiveTransfer(transfer);
+      _metricsService.recordTransferComplete(transfer);
+
+      // Trim cache if needed (keep 100 most recent)
+      while (_completedCache.length > 100) {
+        final oldest = _completedCache.values.reduce(
+          (a, b) => (a.completedAt ?? a.createdAt).isBefore(
+                b.completedAt ?? b.createdAt,
+              )
+              ? a
+              : b,
+        );
+        _completedCache.remove(oldest.id);
+      }
+    } else if (transfer.status == TransferStatus.failed) {
+      _failedCache[transfer.id] = transfer;
+      _storage.archiveTransfer(transfer);
+      _metricsService.recordTransferFailed(transfer);
+    }
+  }
+
   void _handleTransferComplete(Transfer transfer, bool success, String? error) {
     if (success) {
       _completedCache[transfer.id] = transfer;

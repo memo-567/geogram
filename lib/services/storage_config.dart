@@ -62,7 +62,16 @@ class StorageConfig {
   String get sslDir => path.join(baseDir, 'ssl');
 
   /// Get the logs directory path
+  @Deprecated('Use logsDirForProfile(callsign) for profile-specific logs')
   String get logsDir => path.join(baseDir, 'logs');
+
+  /// Get the logs directory for a specific profile/callsign
+  ///
+  /// Returns path like: {devicesDir}/{CALLSIGN}/log
+  String logsDirForProfile(String callsign) {
+    final sanitized = _sanitizeCallsign(callsign);
+    return path.join(devicesDir, sanitized, 'log');
+  }
 
   /// Get the email directory path (deprecated - use emailDirForProfile)
   @Deprecated('Use emailDirForProfile(callsign) for profile-specific paths')
@@ -292,7 +301,7 @@ class StorageConfig {
       path.join(base, 'chat'),
       path.join(base, 'tiles'),
       path.join(base, 'ssl'),
-      path.join(base, 'logs'),
+      // log directory is now per-profile via logsDirForProfile()
     ];
 
     for (final dir in directories) {
@@ -322,7 +331,7 @@ class StorageConfig {
       'devicesDir': devicesDir,
       'tilesDir': tilesDir,
       'sslDir': sslDir,
-      'logsDir': logsDir,
+      'logsDir': '(per-profile)', // logs are now stored per-profile in {devicesDir}/{CALLSIGN}/log
       'configPath': configPath,
       'stationConfigPath': stationConfigPath,
     };

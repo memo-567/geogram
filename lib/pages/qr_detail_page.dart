@@ -5,16 +5,16 @@
 
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:qr_flutter/qr_flutter.dart' hide QrCode;
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../models/qr_code.dart';
 import '../services/i18n_service.dart';
 import '../services/qr_code_service.dart';
+import '../widgets/qr_preview_widget.dart';
+import 'photo_viewer_page.dart';
 import 'qr_generator_page.dart';
 
 /// Page for viewing and editing QR code details
@@ -39,60 +39,11 @@ class _QrDetailPageState extends State<QrDetailPage> {
   final QrCodeService _qrService = QrCodeService();
 
   late QrCode _code;
-  bool _isEditing = false;
-  late TextEditingController _nameController;
-  late TextEditingController _notesController;
-  late TextEditingController _tagsController;
 
   @override
   void initState() {
     super.initState();
     _code = widget.code;
-    _nameController = TextEditingController(text: _code.name);
-    _notesController = TextEditingController(text: _code.notes ?? '');
-    _tagsController = TextEditingController(text: _code.tags.join(', '));
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _notesController.dispose();
-    _tagsController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _saveChanges() async {
-    final updatedCode = _code.copyWith(
-      name: _nameController.text.trim(),
-      notes: _notesController.text.trim().isNotEmpty
-          ? _notesController.text.trim()
-          : null,
-      tags: _tagsController.text
-          .split(',')
-          .map((t) => t.trim())
-          .where((t) => t.isNotEmpty)
-          .toList(),
-    );
-
-    try {
-      final saved = await _qrService.updateQrCode(updatedCode);
-      setState(() {
-        _code = saved;
-        _isEditing = false;
-      });
-      widget.onUpdated?.call();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_i18n.t('saved'))),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
-      }
-    }
   }
 
   Future<void> _deleteCode() async {
@@ -200,19 +151,24 @@ class _QrDetailPageState extends State<QrDetailPage> {
     );
 
     if (result != null) {
-      // Update the code with the edited version
-      final updated = await _qrService.updateQrCode(result);
-      setState(() {
-        _code = updated;
-        _nameController.text = updated.name;
-        _notesController.text = updated.notes ?? '';
-        _tagsController.text = updated.tags.join(', ');
-      });
-      widget.onUpdated?.call();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_i18n.t('saved'))),
-        );
+      try {
+        // Update the code with the edited version
+        final updated = await _qrService.updateQrCode(result);
+        setState(() {
+          _code = updated;
+        });
+        widget.onUpdated?.call();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(_i18n.t('saved'))),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error saving: $e')),
+          );
+        }
       }
     }
   }
@@ -288,26 +244,41 @@ class _QrDetailPageState extends State<QrDetailPage> {
     }
   }
 
+  Future<void> _showFullscreen(BuildContext context) async {
+    try {
+      // Decode the stored image and write to a temp file
+      if (!_code.image.startsWith('data:image/')) return;
+      final base64Start = _code.image.indexOf(',') + 1;
+      final base64Data = _code.image.substring(base64Start);
+      final bytes = base64Decode(base64Data);
+
+      final tempDir = await getTemporaryDirectory();
+      final file = File('${tempDir.path}/qr_fullscreen_${_code.id}.png');
+      await file.writeAsBytes(bytes);
+
+      if (!mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => PhotoViewerPage(imagePaths: [file.path]),
+        ),
+      );
+    } catch (e) {
+      // Ignore errors
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_isEditing ? _i18n.t('edit_code') : _code.name),
+        title: Text(_code.name),
         actions: [
-          if (_isEditing)
-            IconButton(
-              icon: const Icon(Icons.check),
-              onPressed: _saveChanges,
-              tooltip: _i18n.t('save'),
-            )
-          else ...[
             IconButton(
               icon: const Icon(Icons.edit),
-              onPressed: _code.source == QrCodeSource.scanned
-                  ? _openGeneratorForEdit
-                  : () => setState(() => _isEditing = true),
+              onPressed: _openGeneratorForEdit,
               tooltip: _i18n.t('edit'),
             ),
             IconButton(
@@ -362,26 +333,42 @@ class _QrDetailPageState extends State<QrDetailPage> {
                 ),
               ],
             ),
-          ],
         ],
       ),
       body: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Code image
+            // Code image with notes underneath
             Container(
               padding: const EdgeInsets.all(24),
               color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
-              child: Center(
-                child: _buildCodeImage(),
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  QrPreviewWidget(
+                    code: _code,
+                    size: 200,
+                    showShadow: true,
+                  ),
+                  // Fullscreen button
+                  Positioned(
+                    top: 0,
+                    right: 0,
+                    child: IconButton(
+                      icon: const Icon(Icons.fullscreen),
+                      tooltip: _i18n.t('fullscreen'),
+                      onPressed: () => _showFullscreen(context),
+                    ),
+                  ),
+                ],
               ),
             ),
 
             // Content section
             Padding(
               padding: const EdgeInsets.all(16),
-              child: _isEditing ? _buildEditForm() : _buildDetailView(),
+              child: _buildDetailView(),
             ),
           ],
         ),
@@ -399,80 +386,6 @@ class _QrDetailPageState extends State<QrDetailPage> {
               ),
             )
           : null,
-    );
-  }
-
-  Widget _buildCodeImage() {
-    // For scanned 2D codes, generate a live QR code so other users can scan it
-    if (_code.source == QrCodeSource.scanned && _code.format.is2D) {
-      return Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.1),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: QrImageView(
-          data: _code.content,
-          version: QrVersions.auto,
-          size: 200,
-          backgroundColor: Colors.white,
-          padding: const EdgeInsets.all(8),
-        ),
-      );
-    }
-
-    // For created codes, decode base64 image (preserves custom colors/logos)
-    try {
-      if (_code.image.startsWith('data:image/')) {
-        final base64Start = _code.image.indexOf(',') + 1;
-        final base64Data = _code.image.substring(base64Start);
-        final bytes = base64Decode(base64Data);
-
-        return Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.1),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Image.memory(
-            Uint8List.fromList(bytes),
-            width: 200,
-            height: 200,
-            fit: BoxFit.contain,
-          ),
-        );
-      }
-    } catch (e) {
-      // Fall through to placeholder
-    }
-
-    // Placeholder for barcodes and failed images
-    return Container(
-      width: 200,
-      height: 200,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Icon(
-        _code.format.is2D ? Icons.qr_code_2 : Icons.barcode_reader,
-        size: 64,
-        color: Colors.grey,
-      ),
     );
   }
 
@@ -577,17 +490,7 @@ class _QrDetailPageState extends State<QrDetailPage> {
           const SizedBox(height: 16),
         ],
 
-        // Notes
-        if (_code.notes != null && _code.notes!.isNotEmpty) ...[
-          Text(
-            _i18n.t('notes'),
-            style: theme.textTheme.titleSmall?.copyWith(
-              color: theme.colorScheme.primary,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(_code.notes!),
-        ],
+        // Notes are displayed inside the QR code image
       ],
     );
   }
@@ -649,60 +552,6 @@ class _QrDetailPageState extends State<QrDetailPage> {
           fontFamily: 'monospace',
         ),
       ),
-    );
-  }
-
-  Widget _buildEditForm() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        TextField(
-          controller: _nameController,
-          decoration: InputDecoration(
-            labelText: _i18n.t('name'),
-            border: const OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _notesController,
-          decoration: InputDecoration(
-            labelText: _i18n.t('notes'),
-            border: const OutlineInputBorder(),
-          ),
-          maxLines: 3,
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _tagsController,
-          decoration: InputDecoration(
-            labelText: _i18n.t('tags'),
-            hintText: _i18n.t('comma_separated_tags'),
-            border: const OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            OutlinedButton(
-              onPressed: () {
-                setState(() {
-                  _isEditing = false;
-                  _nameController.text = _code.name;
-                  _notesController.text = _code.notes ?? '';
-                  _tagsController.text = _code.tags.join(', ');
-                });
-              },
-              child: Text(_i18n.t('cancel')),
-            ),
-            const SizedBox(width: 8),
-            FilledButton(
-              onPressed: _saveChanges,
-              child: Text(_i18n.t('save')),
-            ),
-          ],
-        ),
-      ],
     );
   }
 

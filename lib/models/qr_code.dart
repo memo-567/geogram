@@ -13,7 +13,6 @@ enum QrFormat {
   qrMicro('qr_micro', 'QR_CODE', 'Micro QR'),
   dataMatrix('data_matrix', 'DATA_MATRIX', 'Data Matrix'),
   aztec('aztec', 'AZTEC', 'Aztec'),
-  pdf417('pdf417', 'PDF_417', 'PDF417'),
   maxicode('maxicode', 'MAXICODE', 'MaxiCode'),
 
   // 1D barcodes
@@ -155,6 +154,14 @@ class QrCode {
   /// File path (set when loaded from disk)
   final String? filePath;
 
+  // Customization fields
+  final String? foregroundColor; // Hex color e.g. "FF000000"
+  final String? backgroundColor; // Hex color e.g. "FFFFFFFF"
+  final bool? roundedModules;
+  final String? logoImage; // Base64 encoded logo
+  final int? notesFontSize; // Font size for notes text (14, 24, 48)
+  final bool? notesBold; // Whether notes text is bold
+
   QrCode({
     String? id,
     required this.name,
@@ -171,6 +178,12 @@ class QrCode {
     this.scanLocation,
     this.extraMetadata,
     this.filePath,
+    this.foregroundColor,
+    this.backgroundColor,
+    this.roundedModules,
+    this.logoImage,
+    this.notesFontSize,
+    this.notesBold,
   })  : id = id ?? const Uuid().v4(),
         createdAt = createdAt ?? DateTime.now(),
         modifiedAt = modifiedAt ?? DateTime.now(),
@@ -196,6 +209,12 @@ class QrCode {
     Map<String, dynamic>? scanLocation,
     Map<String, dynamic>? extraMetadata,
     String? filePath,
+    String? foregroundColor,
+    String? backgroundColor,
+    bool? roundedModules,
+    String? logoImage,
+    int? notesFontSize,
+    bool? notesBold,
   }) {
     return QrCode(
       id: id ?? this.id,
@@ -213,6 +232,12 @@ class QrCode {
       scanLocation: scanLocation ?? this.scanLocation,
       extraMetadata: extraMetadata ?? this.extraMetadata,
       filePath: filePath ?? this.filePath,
+      foregroundColor: foregroundColor ?? this.foregroundColor,
+      backgroundColor: backgroundColor ?? this.backgroundColor,
+      roundedModules: roundedModules ?? this.roundedModules,
+      logoImage: logoImage ?? this.logoImage,
+      notesFontSize: notesFontSize ?? this.notesFontSize,
+      notesBold: notesBold ?? this.notesBold,
     );
   }
 
@@ -232,6 +257,27 @@ class QrCode {
       metadata.addAll(extraMetadata!);
     }
 
+    // Customization fields
+    final customization = <String, dynamic>{};
+    if (foregroundColor != null) {
+      customization['foregroundColor'] = foregroundColor;
+    }
+    if (backgroundColor != null) {
+      customization['backgroundColor'] = backgroundColor;
+    }
+    if (roundedModules != null) {
+      customization['roundedModules'] = roundedModules;
+    }
+    if (logoImage != null) {
+      customization['logoImage'] = logoImage;
+    }
+    if (notesFontSize != null) {
+      customization['notesFontSize'] = notesFontSize;
+    }
+    if (notesBold != null && notesBold!) {
+      customization['notesBold'] = notesBold;
+    }
+
     return {
       'version': formatVersion,
       'id': id,
@@ -246,6 +292,7 @@ class QrCode {
       if (tags.isNotEmpty) 'tags': tags,
       'image': image,
       if (metadata.isNotEmpty) 'metadata': metadata,
+      if (customization.isNotEmpty) 'customization': customization,
     };
   }
 
@@ -263,6 +310,15 @@ class QrCode {
       ..remove('errorCorrection')
       ..remove('notes')
       ..remove('scanLocation');
+
+    // Extract customization fields
+    final customization = json['customization'] as Map<String, dynamic>? ?? {};
+    final foregroundColor = customization['foregroundColor'] as String?;
+    final backgroundColor = customization['backgroundColor'] as String?;
+    final roundedModules = customization['roundedModules'] as bool?;
+    final logoImage = customization['logoImage'] as String?;
+    final notesFontSize = customization['notesFontSize'] as int?;
+    final notesBold = customization['notesBold'] as bool?;
 
     return QrCode(
       id: json['id'] as String,
@@ -282,6 +338,12 @@ class QrCode {
       scanLocation: scanLocation,
       extraMetadata: extraMetadata.isNotEmpty ? extraMetadata : null,
       filePath: filePath,
+      foregroundColor: foregroundColor,
+      backgroundColor: backgroundColor,
+      roundedModules: roundedModules,
+      logoImage: logoImage,
+      notesFontSize: notesFontSize,
+      notesBold: notesBold,
     );
   }
 

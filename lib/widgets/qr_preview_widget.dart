@@ -64,8 +64,8 @@ class QrPreviewWidget extends StatelessWidget {
   }
 
   Widget _buildQrContent(BuildContext context) {
-    // For created codes with stored PNG image, use the stored image (preserves visual customizations)
-    if (code.source == QrCodeSource.created && code.image.startsWith('data:image/png')) {
+    // Use stored PNG image when available (preserves visual customizations and notes)
+    if (code.image.startsWith('data:image/png')) {
       try {
         final base64Start = code.image.indexOf(',') + 1;
         final base64Data = code.image.substring(base64Start);
@@ -170,8 +170,6 @@ class QrPreviewWidget extends StatelessWidget {
         return Format.dataMatrix;
       case QrFormat.aztec:
         return Format.aztec;
-      case QrFormat.pdf417:
-        return Format.pdf417;
       case QrFormat.maxicode:
         return Format.maxiCode;
       case QrFormat.barcodeCode39:

@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart' show ValueNotifier, kIsWeb;
 import 'package:mime/mime.dart';
 import '../models/app.dart';
+import 'i18n_service.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_security.dart';
 import '../models/chat_settings.dart';
@@ -201,7 +202,7 @@ class AppService {
 
   /// Default app types that should be created for every profile
   /// These are the core apps that users expect to be available
-  static const List<String> _defaultAppTypes = [
+  static const List<String> defaultAppTypes = [
     'www',
     'chat',
     'contacts',
@@ -210,6 +211,11 @@ class AppService {
     'groups',
     'transfer',
     'tracker',
+    'blog',
+    'alerts',
+    'inventory',
+    'backup',
+    'log',
   ];
 
   /// Ensure default apps exist for the current profile
@@ -227,13 +233,13 @@ class AppService {
     }
 
     // Check which default types already have folders — no full app scan needed
-    for (final type in _defaultAppTypes) {
+    for (final type in defaultAppTypes) {
       final dir = Directory('${_appsDir!.path}/$type');
       if (!await dir.exists()) {
         try {
           stderr.writeln('Creating default app: $type');
           final app = await createApp(
-            title: type[0].toUpperCase() + type.substring(1),
+            title: I18nService().t('app_type_$type'),
             description: '',
             type: type,
           );
@@ -1154,7 +1160,7 @@ class AppService {
 
   /// Skips app.js parsing — the folder name is the type.
   App _createMinimalApp(String type, String storagePath) {
-    final title = type[0].toUpperCase() + type.substring(1);
+    final title = I18nService().t('app_type_$type');
     final app = App(
       id: type,
       title: title,

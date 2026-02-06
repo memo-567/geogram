@@ -100,7 +100,13 @@ class SendItem {
 
 /// Page for selecting files and folders to send
 class TransferSendPage extends StatefulWidget {
-  const TransferSendPage({super.key});
+  const TransferSendPage({
+    super.key,
+    this.initialPaths,
+  });
+
+  /// Optional list of file/folder paths to pre-select for sending
+  final List<String>? initialPaths;
 
   /// Remember last used recipient (in RAM only, not persisted)
   static String? _lastRecipientCallsign;
@@ -127,6 +133,7 @@ class _TransferSendPageState extends State<TransferSendPage> {
   void initState() {
     super.initState();
     _initDevicesService();
+    _loadInitialPaths();
   }
 
   Future<void> _initDevicesService() async {
@@ -159,6 +166,55 @@ class _TransferSendPageState extends State<TransferSendPage> {
         }
       }
     });
+  }
+
+  /// Load pre-selected paths from widget.initialPaths
+  Future<void> _loadInitialPaths() async {
+    final paths = widget.initialPaths;
+    if (paths == null || paths.isEmpty) return;
+
+    setState(() => _isCalculatingSize = true);
+
+    for (final itemPath in paths) {
+      // Check if already added
+      if (_items.any((item) => item.path == itemPath)) continue;
+
+      try {
+        final isDir = await FileSystemEntity.isDirectory(itemPath);
+        final name = itemPath.split(Platform.pathSeparator).last;
+
+        SendItem newItem;
+        if (isDir) {
+          final size = await _calculateDirectorySize(itemPath);
+          newItem = SendItem(
+            path: itemPath,
+            name: name,
+            isDirectory: true,
+            sizeBytes: size,
+          );
+        } else {
+          final file = File(itemPath);
+          final size = await file.length();
+          newItem = SendItem(
+            path: itemPath,
+            name: name,
+            isDirectory: false,
+            sizeBytes: size,
+          );
+        }
+
+        if (mounted) {
+          setState(() => _items.add(newItem));
+        }
+      } catch (e) {
+        // Skip items that can't be accessed
+        debugPrint('Error loading initial path $itemPath: $e');
+      }
+    }
+
+    if (mounted) {
+      setState(() => _isCalculatingSize = false);
+    }
   }
 
   /// Restore last used recipient from static cache
@@ -217,30 +273,6 @@ class _TransferSendPageState extends State<TransferSendPage> {
     setState(() => _recipient = recipient);
   }
 
-  void _setRecipientFromCallsign(String callsign) {
-    if (callsign.trim().isEmpty) {
-      setState(() => _recipient = null);
-    } else {
-      // Check if this matches an existing device
-      final matchingDevice = _reachableDevices.firstWhere(
-        (d) =>
-            d.callsign.toUpperCase() == callsign.trim().toUpperCase() ||
-            d.nickname?.toLowerCase() == callsign.trim().toLowerCase(),
-        orElse: () => RemoteDevice(
-          callsign: '',
-          name: '',
-          apps: [],
-        ),
-      );
-
-      if (matchingDevice.callsign.isNotEmpty) {
-        setState(() => _recipient = Recipient.fromRemoteDevice(matchingDevice));
-      } else {
-        setState(() => _recipient = Recipient.fromCallsign(callsign.trim()));
-      }
-    }
-  }
-
   void _clearRecipient() {
     _callsignController.clear();
     setState(() => _recipient = null);
@@ -261,6 +293,9 @@ class _TransferSendPageState extends State<TransferSendPage> {
   }
 
   Future<void> _addItems() async {
+    // Hide keyboard before opening file picker (mobile)
+    FocusScope.of(context).unfocus();
+
     try {
       final paths = await FileFolderPicker.show(
         context,
@@ -413,37 +448,46 @@ class _TransferSendPageState extends State<TransferSendPage> {
       ),
       body: Column(
         children: [
-          // Recipient section
-          _buildRecipientSection(theme),
+          // Scrollable content area
+          Expanded(
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Recipient section
+                  _buildRecipientSection(theme),
 
-          // Add button
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: _isCalculatingSize ? null : _addItems,
-                icon: _isCalculatingSize
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.add),
-                label: const Text('Add'),
+                  // Add button
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: _isCalculatingSize ? null : _addItems,
+                        icon: _isCalculatingSize
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.add),
+                        label: const Text('Add'),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Items list or empty state (non-scrollable, sized by content)
+                  if (_items.isEmpty)
+                    _buildEmptyState(theme)
+                  else
+                    _buildItemsList(theme),
+                ],
               ),
             ),
           ),
-          const SizedBox(height: 8),
 
-          // Items list or empty state
-          Expanded(
-            child: _items.isEmpty
-                ? _buildEmptyState(theme)
-                : _buildItemsList(theme),
-          ),
-
-          // Bottom summary and send button
+          // Bottom summary and send button (stays fixed)
           _buildBottomBar(theme),
         ],
       ),
@@ -466,90 +510,84 @@ class _TransferSendPageState extends State<TransferSendPage> {
               ),
             ),
             const SizedBox(height: 12),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Expanded(
-                  child: Autocomplete<RemoteDevice>(
-                    optionsBuilder: (textEditingValue) {
-                      return _filterDevices(textEditingValue.text);
-                    },
-                    displayStringForOption: (device) {
-                      return device.nickname != null
-                          ? '${device.nickname} (${device.callsign})'
-                          : device.callsign;
-                    },
-                    onSelected: _selectDevice,
-                    fieldViewBuilder: (
-                      context,
-                      controller,
-                      focusNode,
-                      onFieldSubmitted,
-                    ) {
-                      // Sync with our controller when text changes externally
-                      if (_callsignController.text.isNotEmpty &&
-                          controller.text != _callsignController.text) {
-                        controller.text = _callsignController.text;
-                      }
+                Autocomplete<RemoteDevice>(
+                  optionsBuilder: (textEditingValue) {
+                    return _filterDevices(textEditingValue.text);
+                  },
+                  displayStringForOption: (device) {
+                    return device.nickname != null
+                        ? '${device.nickname} (${device.callsign})'
+                        : device.callsign;
+                  },
+                  onSelected: _selectDevice,
+                  fieldViewBuilder: (
+                    context,
+                    controller,
+                    focusNode,
+                    onFieldSubmitted,
+                  ) {
+                    // Sync with our controller when text changes externally
+                    if (_callsignController.text.isNotEmpty &&
+                        controller.text != _callsignController.text) {
+                      controller.text = _callsignController.text;
+                    }
 
-                      return TextField(
-                        controller: controller,
-                        focusNode: focusNode,
-                        decoration: InputDecoration(
-                          hintText: 'Enter callsign or nickname...',
-                          border: const OutlineInputBorder(),
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 12,
-                          ),
-                          suffixIcon: controller.text.isNotEmpty
-                              ? IconButton(
-                                  icon: const Icon(Icons.clear),
-                                  onPressed: () {
-                                    controller.clear();
-                                    _clearRecipient();
-                                  },
-                                )
-                              : null,
+                    return TextField(
+                      controller: controller,
+                      focusNode: focusNode,
+                      readOnly: true,
+                      decoration: InputDecoration(
+                        hintText: 'Tap to select recipient...',
+                        border: const OutlineInputBorder(),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 12,
                         ),
-                        onChanged: (value) {
-                          _callsignController.text = value;
-                          _setRecipientFromCallsign(value);
-                        },
-                        onSubmitted: (_) => onFieldSubmitted(),
-                      );
-                    },
-                    optionsViewBuilder: (context, onSelected, options) {
-                      return Align(
-                        alignment: Alignment.topLeft,
-                        child: Material(
-                          elevation: 4,
-                          borderRadius: BorderRadius.circular(8),
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(
-                              maxHeight: 300,
-                              maxWidth: 350,
-                            ),
-                            child: ListView.builder(
-                              padding: EdgeInsets.zero,
-                              shrinkWrap: true,
-                              itemCount: options.length,
-                              itemBuilder: (context, index) {
-                                final device = options.elementAt(index);
-                                return _buildDeviceOption(
-                                  theme,
-                                  device,
-                                  () => onSelected(device),
-                                );
-                              },
-                            ),
+                        suffixIcon: controller.text.isNotEmpty
+                            ? IconButton(
+                                icon: const Icon(Icons.clear),
+                                onPressed: () {
+                                  controller.clear();
+                                  _clearRecipient();
+                                },
+                              )
+                            : const Icon(Icons.arrow_drop_down),
+                      ),
+                    );
+                  },
+                  optionsViewBuilder: (context, onSelected, options) {
+                    return Align(
+                      alignment: Alignment.topLeft,
+                      child: Material(
+                        elevation: 4,
+                        borderRadius: BorderRadius.circular(8),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(
+                            maxHeight: 300,
+                            maxWidth: 350,
+                          ),
+                          child: ListView.builder(
+                            padding: EdgeInsets.zero,
+                            shrinkWrap: true,
+                            itemCount: options.length,
+                            itemBuilder: (context, index) {
+                              final device = options.elementAt(index);
+                              return _buildDeviceOption(
+                                theme,
+                                device,
+                                () => onSelected(device),
+                              );
+                            },
                           ),
                         ),
-                      );
-                    },
-                  ),
+                      ),
+                    );
+                  },
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(height: 12),
                 OutlinedButton.icon(
                   onPressed: _scanQrCode,
                   icon: const Icon(Icons.qr_code_scanner),
@@ -592,7 +630,7 @@ class _TransferSendPageState extends State<TransferSendPage> {
                 ),
               ),
               const SizedBox(width: 10),
-              Expanded(
+              Flexible(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -603,6 +641,7 @@ class _TransferSendPageState extends State<TransferSendPage> {
                       style: theme.textTheme.bodyMedium?.copyWith(
                         fontWeight: FontWeight.w500,
                       ),
+                      overflow: TextOverflow.ellipsis,
                     ),
                     // Secondary: callsign if nickname exists, or connection info
                     if (hasNickname)
@@ -612,16 +651,21 @@ class _TransferSendPageState extends State<TransferSendPage> {
                           color: theme.colorScheme.onSurfaceVariant,
                           fontFamily: 'monospace',
                         ),
+                        overflow: TextOverflow.ellipsis,
                       ),
                   ],
                 ),
               ),
+              const SizedBox(width: 8),
               // Connection methods
               if (device.connectionMethods.isNotEmpty)
-                Text(
-                  device.connectionMethods.take(2).join(' • '),
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
+                Flexible(
+                  child: Text(
+                    device.connectionMethods.take(2).join(' • '),
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
             ],
@@ -723,6 +767,8 @@ class _TransferSendPageState extends State<TransferSendPage> {
 
   Widget _buildItemsList(ThemeData theme) {
     return ListView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
       padding: const EdgeInsets.symmetric(horizontal: 8),
       itemCount: _items.length,
       itemBuilder: (context, index) {

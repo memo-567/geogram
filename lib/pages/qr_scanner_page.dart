@@ -119,14 +119,29 @@ class _QrScannerPageState extends State<QrScannerPage> {
     );
 
     if (result != null && result['save'] == true) {
+      // If notes were provided, embed them into the stored image
+      final notes = result['notes'] as String?;
+      var finalImage = imageBase64;
+      if (notes != null && notes.trim().isNotEmpty && imageBase64.startsWith('data:image/png')) {
+        try {
+          final base64Start = imageBase64.indexOf(',') + 1;
+          final base64Data = imageBase64.substring(base64Start);
+          final imgBytes = base64Decode(base64Data);
+          final withNotes = BarcodeEncoderService.addNotesToImage(imgBytes, notes.trim());
+          finalImage = 'data:image/png;base64,${base64Encode(withNotes)}';
+        } catch (e) {
+          // Keep original image on error
+        }
+      }
+
       // Create QrCode object
       final qrCode = QrCode(
         name: result['name'] as String? ?? _generateDefaultName(contentType, content),
         format: format,
         content: content,
         source: QrCodeSource.scanned,
-        image: imageBase64,
-        notes: result['notes'] as String?,
+        image: finalImage,
+        notes: notes,
       );
 
       if (mounted) {
@@ -143,7 +158,6 @@ class _QrScannerPageState extends State<QrScannerPage> {
     if (format == Format.qrCode) return QrFormat.qrStandard;
     if (format == Format.dataMatrix) return QrFormat.dataMatrix;
     if (format == Format.aztec) return QrFormat.aztec;
-    if (format == Format.pdf417) return QrFormat.pdf417;
     if (format == Format.maxiCode) return QrFormat.maxicode;
     if (format == Format.code39) return QrFormat.barcodeCode39;
     if (format == Format.code93) return QrFormat.barcodeCode93;
@@ -191,8 +205,6 @@ class _QrScannerPageState extends State<QrScannerPage> {
         return Format.dataMatrix;
       case QrFormat.aztec:
         return Format.aztec;
-      case QrFormat.pdf417:
-        return Format.pdf417;
       case QrFormat.barcodeCode39:
         return Format.code39;
       case QrFormat.barcodeCode93:

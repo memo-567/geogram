@@ -1,8 +1,14 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:path/path.dart' as p;
 
+import '../pages/document_viewer_editor_page.dart';
+import '../pages/photo_viewer_page.dart';
+import '../services/file_launcher_service.dart';
 import '../transfer/models/callsign_transfer_group.dart';
 import '../transfer/models/transfer_metrics.dart';
 import '../transfer/models/transfer_models.dart';
@@ -11,6 +17,7 @@ import '../transfer/services/transfer_metrics_service.dart';
 import '../transfer/services/transfer_service.dart';
 import '../transfer/services/p2p_transfer_service.dart';
 import '../util/event_bus.dart';
+import '../util/file_icon_helper.dart';
 import '../widgets/transfer/transfer_activity_chart.dart';
 import '../widgets/transfer/transfer_callsign_group_tile.dart';
 import '../widgets/transfer/transfer_metrics_card.dart';
@@ -637,9 +644,12 @@ class _TransferPageState extends State<TransferPage>
               children: [
                 Icon(statusIcon, size: 12, color: statusColor),
                 const SizedBox(width: 4),
-                Text(
-                  statusText,
-                  style: theme.textTheme.bodySmall?.copyWith(color: statusColor),
+                Flexible(
+                  child: Text(
+                    statusText,
+                    style: theme.textTheme.bodySmall?.copyWith(color: statusColor),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ],
             ),
@@ -692,22 +702,13 @@ class _TransferPageState extends State<TransferPage>
 
   Widget _buildPreviousTab() {
     // Combine completed and failed transfers, sorted by timestamp (most recent first)
+    // P2P transfers are now archived as regular Transfer records, so they appear here automatically
     final allPrevious = [
       ..._completedTransfers,
       ..._failedTransfers,
     ]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
-    // Get completed/failed P2P offers
-    final completedP2POffers = [
-      ..._outgoingOffers.where((o) =>
-          o.status == TransferOfferStatus.completed ||
-          o.status == TransferOfferStatus.failed),
-      ..._incomingOffers.where((o) =>
-          o.status == TransferOfferStatus.completed ||
-          o.status == TransferOfferStatus.failed),
-    ]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-
-    if (allPrevious.isEmpty && completedP2POffers.isEmpty) {
+    if (allPrevious.isEmpty) {
       return _buildEmptyState(
         'No previous transfers',
         'Completed and failed transfers will appear here',
@@ -739,14 +740,7 @@ class _TransferPageState extends State<TransferPage>
               ),
             ),
 
-          // P2P completed/failed transfers section
-          if (completedP2POffers.isNotEmpty) ...[
-            _buildSectionHeader('P2P Transfers'),
-            ...completedP2POffers.map((offer) => _buildCompletedOfferTile(offer)),
-            const SizedBox(height: 8),
-          ],
-
-          // Regular transfer groups
+          // All transfer groups (including P2P transfers which are now archived as Transfer records)
           ...groups.map((group) => TransferCallsignGroupTile(
             group: group,
             onTransferTap: _showTransferDetails,
@@ -756,89 +750,13 @@ class _TransferPageState extends State<TransferPage>
                 _refreshData();
               }
             },
-            initiallyExpanded: groups.length == 1 && completedP2POffers.isEmpty,
+            onOpenFile: _openTransferFile,
+            onOpenFolder: _openTransferFolder,
+            onDelete: _deleteTransferFile,
+            onCopyPath: _copyTransferPath,
+            initiallyExpanded: groups.length == 1,
           )),
         ],
-      ),
-    );
-  }
-
-  Widget _buildCompletedOfferTile(TransferOffer offer) {
-    final theme = Theme.of(context);
-    final isOutgoing = _outgoingOffers.contains(offer);
-    final success = offer.status == TransferOfferStatus.completed;
-
-    final otherCallsign = isOutgoing
-        ? offer.receiverCallsign ?? 'Unknown'
-        : offer.senderCallsign;
-
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: success
-              ? Colors.green.withValues(alpha: 0.2)
-              : Colors.red.withValues(alpha: 0.2),
-          child: Icon(
-            success ? Icons.check_circle : Icons.error,
-            color: success ? Colors.green : Colors.red,
-            size: 20,
-          ),
-        ),
-        title: Text(
-          '${isOutgoing ? "To" : "From"}: $otherCallsign',
-          style: theme.textTheme.titleSmall?.copyWith(
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SizedBox(height: 4),
-            Text(
-              '${offer.filesCompleted}/${offer.totalFiles} files, ${_formatBytes(offer.bytesTransferred)}',
-              style: theme.textTheme.bodySmall,
-            ),
-            const SizedBox(height: 2),
-            Row(
-              children: [
-                Icon(
-                  success ? Icons.check_circle : Icons.error,
-                  size: 12,
-                  color: success ? Colors.green : Colors.red,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  success ? 'Completed' : 'Failed',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: success ? Colors.green : Colors.red,
-                  ),
-                ),
-                if (offer.transferDuration != null) ...[
-                  const SizedBox(width: 8),
-                  Text(
-                    _formatDuration(offer.transferDuration),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-            if (offer.error != null) ...[
-              const SizedBox(height: 2),
-              Text(
-                offer.error!,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: Colors.red,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
-          ],
-        ),
-        isThreeLine: true,
       ),
     );
   }
@@ -1235,6 +1153,129 @@ class _TransferPageState extends State<TransferPage>
           ),
         ],
       ),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // File action handlers for completed transfers
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /// Check if a file extension is supported by internal viewers
+  bool _isInternallySupported(String ext) {
+    final lowerExt = ext.toLowerCase();
+    // Images, videos, PDF, and editable text files
+    return FileIconHelper.isImage('.$lowerExt') ||
+        FileIconHelper.isVideo('.$lowerExt') ||
+        lowerExt == 'pdf' ||
+        DocumentViewerWidget.isEditableExtension(lowerExt);
+  }
+
+  /// Open a transferred file - internally for supported formats, system app otherwise
+  void _openTransferFile(Transfer transfer) {
+    final path = transfer.localPath;
+    final ext = path.split('.').last.toLowerCase();
+
+    if (_isInternallySupported(ext)) {
+      _openInternalViewer(path, ext);
+    } else {
+      FileLauncherService().openFile(path);
+    }
+  }
+
+  /// Route to the appropriate internal viewer
+  void _openInternalViewer(String filePath, String ext) {
+    final lowerExt = ext.toLowerCase();
+
+    if (FileIconHelper.isImage('.$lowerExt') ||
+        FileIconHelper.isVideo('.$lowerExt')) {
+      // Open in photo/video viewer
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => PhotoViewerPage(imagePaths: [filePath]),
+        ),
+      );
+    } else {
+      // Open in document viewer (PDF, text files, code, etc.)
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => DocumentViewerEditorPage(filePath: filePath),
+        ),
+      );
+    }
+  }
+
+  /// Open the containing folder of a transferred file
+  void _openTransferFolder(Transfer transfer) {
+    final dir = p.dirname(transfer.localPath);
+    FileLauncherService().openFolder(dir);
+  }
+
+  /// Delete a transferred file with confirmation
+  Future<void> _deleteTransferFile(Transfer transfer) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete File'),
+        content: Text('Delete "${transfer.filename}"?\n\nThis cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      final file = File(transfer.localPath);
+      if (await file.exists()) {
+        await file.delete();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Deleted "${transfer.filename}"'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('File not found'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to delete: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  /// Copy the file path to clipboard
+  void _copyTransferPath(Transfer transfer) {
+    Clipboard.setData(ClipboardData(text: transfer.localPath));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Path copied to clipboard')),
     );
   }
 

@@ -63,6 +63,13 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
   qr_model.QrErrorCorrection _errorCorrection = qr_model.QrErrorCorrection.m;
   String _contentType = 'text'; // text, url, wifi, contact
 
+  // Tags
+  late TextEditingController _tagsController;
+
+  // Notes font customization
+  int _notesFontSize = 14;
+  bool _notesBold = false;
+
   // Customization state
   Color _foregroundColor = Colors.black;
   Color _backgroundColor = Colors.white;
@@ -79,6 +86,7 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
     _contentController = TextEditingController(text: widget.initialContent);
     _nameController = TextEditingController();
     _notesController = TextEditingController();
+    _tagsController = TextEditingController();
 
     _wifiSsidController = TextEditingController();
     _wifiPasswordController = TextEditingController();
@@ -95,13 +103,24 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
     if (widget.editCode != null) {
       _initFromEditCode(widget.editCode!);
     }
+
+    // Listen to notes changes to update the preview
+    _notesController.addListener(_onNotesChanged);
+  }
+
+  void _onNotesChanged() {
+    // Trigger rebuild to update notes in preview
+    setState(() {});
   }
 
   void _initFromEditCode(qr_model.QrCode code) {
     _nameController.text = code.name;
     _notesController.text = code.notes ?? '';
+    _tagsController.text = code.tags.join(', ');
     _selectedFormat = code.format;
     _errorCorrection = code.errorCorrection ?? qr_model.QrErrorCorrection.m;
+    _notesFontSize = code.notesFontSize ?? 14;
+    _notesBold = code.notesBold ?? false;
 
     // Restore customization state
     if (code.foregroundColor != null) {
@@ -162,10 +181,12 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
 
   @override
   void dispose() {
+    _notesController.removeListener(_onNotesChanged);
     _tabController.dispose();
     _contentController.dispose();
     _nameController.dispose();
     _notesController.dispose();
+    _tagsController.dispose();
     _wifiSsidController.dispose();
     _wifiPasswordController.dispose();
     _contactNameController.dispose();
@@ -280,6 +301,14 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
     final fgColor = _foregroundColor.toARGB32().toRadixString(16).padLeft(8, '0').toUpperCase();
     final bgColor = _backgroundColor.toARGB32().toRadixString(16).padLeft(8, '0').toUpperCase();
     final String? logoBase64 = _logoBytes != null ? base64Encode(_logoBytes!) : null;
+    final tags = _tagsController.text
+        .split(',')
+        .map((t) => t.trim())
+        .where((t) => t.isNotEmpty)
+        .toList();
+    final notes = _notesController.text.trim().isNotEmpty
+        ? _notesController.text.trim()
+        : null;
 
     final qr_model.QrCode code;
     if (widget.editCode != null) {
@@ -290,13 +319,14 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
         content: content,
         image: imageBase64,
         errorCorrection: _errorCorrection,
-        notes: _notesController.text.trim().isNotEmpty
-            ? _notesController.text.trim()
-            : null,
+        notes: notes,
+        tags: tags,
         foregroundColor: fgColor,
         backgroundColor: bgColor,
         roundedModules: _roundedModules,
         logoImage: logoBase64,
+        notesFontSize: _notesFontSize,
+        notesBold: _notesBold,
       );
     } else {
       // Creating new code
@@ -307,13 +337,14 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
         source: qr_model.QrCodeSource.created,
         image: imageBase64,
         errorCorrection: _errorCorrection,
-        notes: _notesController.text.trim().isNotEmpty
-            ? _notesController.text.trim()
-            : null,
+        notes: notes,
+        tags: tags,
         foregroundColor: fgColor,
         backgroundColor: bgColor,
         roundedModules: _roundedModules,
         logoImage: logoBase64,
+        notesFontSize: _notesFontSize,
+        notesBold: _notesBold,
       );
     }
 
@@ -397,7 +428,30 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
                       ),
                     ],
                   ),
-                  child: _buildQrPreview(),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _buildQrPreview(),
+                      // Notes appear under the QR code in the captured image
+                      if (_notesController.text.trim().isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 160),
+                          child: Text(
+                            _notesController.text.trim(),
+                            style: TextStyle(
+                              fontSize: _notesFontSize * 0.7, // scaled for preview
+                              fontWeight: _notesBold ? FontWeight.bold : FontWeight.normal,
+                              color: Colors.black87,
+                            ),
+                            textAlign: TextAlign.center,
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -540,8 +594,6 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
         return Format.dataMatrix;
       case qr_model.QrFormat.aztec:
         return Format.aztec;
-      case qr_model.QrFormat.pdf417:
-        return Format.pdf417;
       case qr_model.QrFormat.maxicode:
         return Format.maxiCode;
       case qr_model.QrFormat.barcodeCode39:
@@ -760,6 +812,48 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
           ),
           maxLines: 2,
         ),
+        const SizedBox(height: 12),
+
+        // Notes font controls
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Text(_i18n.t('font_size'), style: Theme.of(context).textTheme.bodyMedium),
+            SegmentedButton<int>(
+              segments: const [
+                ButtonSegment(value: 14, label: Text('S')),
+                ButtonSegment(value: 24, label: Text('M')),
+                ButtonSegment(value: 48, label: Text('L')),
+              ],
+              selected: {_notesFontSize},
+              onSelectionChanged: (values) {
+                setState(() => _notesFontSize = values.first);
+              },
+              style: ButtonStyle(
+                visualDensity: VisualDensity.compact,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ),
+            FilterChip(
+              label: const Text('B', style: TextStyle(fontWeight: FontWeight.bold)),
+              selected: _notesBold,
+              onSelected: (v) => setState(() => _notesBold = v),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+
+        // Tags field
+        TextField(
+          controller: _tagsController,
+          decoration: InputDecoration(
+            labelText: _i18n.t('tags'),
+            hintText: _i18n.t('comma_separated_tags'),
+            border: const OutlineInputBorder(),
+          ),
+        ),
         const SizedBox(height: 16),
 
         // Format selector
@@ -772,9 +866,11 @@ class _QrGeneratorPageState extends State<QrGeneratorPage>
           spacing: 8,
           runSpacing: 8,
           children: [
+            // 2D Codes
             _buildFormatChip(qr_model.QrFormat.qrStandard),
             _buildFormatChip(qr_model.QrFormat.dataMatrix),
             _buildFormatChip(qr_model.QrFormat.aztec),
+            // 1D Barcodes
             _buildFormatChip(qr_model.QrFormat.barcodeCode128),
           ],
         ),

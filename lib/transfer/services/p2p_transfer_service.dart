@@ -15,8 +15,10 @@ import '../../services/profile_service.dart';
 import '../../util/event_bus.dart';
 import '../../util/nostr_event.dart';
 import '../models/transfer_offer.dart';
+import '../models/transfer_models.dart';
 import '../../pages/transfer_send_page.dart';
 import 'transfer_metrics_service.dart';
+import 'transfer_service.dart';
 
 /// P2P Transfer Service - Manages peer-to-peer file transfers
 ///
@@ -305,6 +307,26 @@ class P2PTransferService {
         bytesTransferred: offer.bytesTransferred,
         isUpload: true, // We are uploading/sending
       );
+
+      // Archive each file as a Transfer record for history
+      for (final fileInfo in offer.files) {
+        final transfer = Transfer(
+          id: '${offer.offerId}_${fileInfo.name.hashCode}',
+          direction: TransferDirection.upload,
+          sourceCallsign: '',
+          targetCallsign: offer.receiverCallsign ?? 'Unknown',
+          remotePath: fileInfo.name,
+          localPath: fileInfo.path,
+          filename: fileInfo.name,
+          expectedBytes: fileInfo.size,
+          status: TransferStatus.completed,
+          bytesTransferred: fileInfo.size,
+          createdAt: offer.startedAt ?? offer.createdAt,
+          completedAt: DateTime.now(),
+          transportUsed: 'p2p',
+        );
+        TransferService().archiveCompletedTransfer(transfer);
+      }
     } else {
       offer.status = TransferOfferStatus.failed;
       offer.error = message['error'] as String?;
@@ -622,6 +644,26 @@ class P2PTransferService {
         bytesTransferred: totalBytesReceived,
         isUpload: false, // We are downloading/receiving
       );
+
+      // Archive each file as a Transfer record for history
+      for (final fileInfo in offer.files) {
+        final transfer = Transfer(
+          id: '${offer.offerId}_${fileInfo.name.hashCode}',
+          direction: TransferDirection.download,
+          sourceCallsign: offer.senderCallsign,
+          targetCallsign: '',
+          remotePath: fileInfo.name,
+          localPath: '${offer.destinationPath}/${fileInfo.path}',
+          filename: fileInfo.name,
+          expectedBytes: fileInfo.size,
+          status: TransferStatus.completed,
+          bytesTransferred: fileInfo.size,
+          createdAt: offer.startedAt ?? offer.createdAt,
+          completedAt: DateTime.now(),
+          transportUsed: 'p2p',
+        );
+        TransferService().archiveCompletedTransfer(transfer);
+      }
 
       // Send completion notification
       await _sendCompletion(offer, true, totalBytesReceived, filesCompleted);

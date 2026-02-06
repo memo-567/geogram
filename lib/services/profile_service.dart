@@ -412,6 +412,9 @@ class ProfileService {
     }
     await AppService().setActiveCallsign(newProfile.callsign);
 
+    // Switch logs to profile-specific directory
+    await LogService().switchToProfile(newProfile.callsign);
+
     // Ensure default collections exist for this profile
     await AppService().ensureDefaultApps();
 
@@ -658,6 +661,10 @@ class ProfileService {
         AppService().setNsec(profile.nsec);
       }
       await AppService().setActiveCallsign(profile.callsign);
+
+      // Switch logs to profile-specific directory
+      await LogService().switchToProfile(profile.callsign);
+
       await AppService().ensureDefaultApps();
     } catch (e) {
       LogService().log('ProfileService: Failed to update callsign path: $e');

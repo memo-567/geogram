@@ -54,5 +54,6 @@
   "move_to_folder": "Mover para Pasta",
   "no_folder": "Sem Pasta (Raiz)",
   "code_moved": "Código movido com sucesso",
-  "scanning_not_supported": "Digitalização por câmara não disponível nesta plataforma"
+  "scanning_not_supported": "Digitalização por câmara não disponível nesta plataforma",
+  "fullscreen": "Ecrã Inteiro"
 }

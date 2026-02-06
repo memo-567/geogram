@@ -2,6 +2,7 @@ package dev.geogram
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.hardware.usb.UsbAccessory
@@ -9,6 +10,8 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
+import android.provider.MediaStore
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
@@ -23,11 +26,15 @@ class MainActivity : FlutterActivity() {
     private val CRASH_CHANNEL = "dev.geogram/crash"
     private val USB_CHANNEL = "dev.geogram/usb_attach"
     private val FILE_LAUNCHER_CHANNEL = "dev.geogram/file_launcher"
+    private val FILE_VIEWER_CHANNEL = "dev.geogram/file_viewer"
+    private val RECENT_FILES_CHANNEL = "dev.geogram/recent_files"
     private var bluetoothClassicPlugin: BluetoothClassicPlugin? = null
     private var wifiDirectPlugin: WifiDirectPlugin? = null
     private var usbSerialPlugin: UsbSerialPlugin? = null
     private var usbAoaPlugin: UsbAoaPlugin? = null
     private var usbMethodChannel: MethodChannel? = null
+    private var fileViewerMethodChannel: MethodChannel? = null
+    private var recentFilesMethodChannel: MethodChannel? = null
 
     // Known ESP32 USB identifiers (VID, PID pairs)
     private val ESP32_IDENTIFIERS = listOf(
@@ -62,8 +69,17 @@ class MainActivity : FlutterActivity() {
         // Initialize USB attachment channel for auto-detection
         usbMethodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, USB_CHANNEL)
 
+        // Initialize file viewer channel for external file viewing
+        fileViewerMethodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, FILE_VIEWER_CHANNEL)
+
+        // Initialize recent files channel for MediaStore queries
+        setupRecentFilesChannel(flutterEngine)
+
         // Check if launched with USB device attached (cold start)
         handleUsbIntent(intent)
+
+        // Check if launched with VIEW intent for external file (cold start)
+        handleFileViewIntent(intent)
 
         // BLE foreground service channel with bidirectional communication
         val bleChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BLE_CHANNEL)
@@ -340,11 +356,12 @@ class MainActivity : FlutterActivity() {
     }
 
     /**
-     * Handle USB attachment when app is already running (warm start)
+     * Handle USB attachment or file view when app is already running (warm start)
      */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleUsbIntent(intent)
+        handleFileViewIntent(intent)
     }
 
     /**
@@ -399,6 +416,85 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    /**
+     * Handle VIEW intent for external files (images, videos, PDFs)
+     * Copies the file to cache and notifies Dart to open the appropriate viewer
+     */
+    private fun handleFileViewIntent(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VIEW) return
+        val uri = intent.data ?: return
+        val mimeType = intent.type ?: contentResolver.getType(uri)
+
+        if (mimeType == null || !isSupportedViewerMimeType(mimeType)) return
+
+        try {
+            val fileName = getFileNameFromUri(uri) ?: "file_${System.currentTimeMillis()}"
+            val extension = getExtensionForMimeType(mimeType) ?: ""
+            val finalName = if (fileName.contains('.')) fileName else "$fileName$extension"
+
+            val cacheDir = File(cacheDir, "external_files")
+            cacheDir.mkdirs()
+            val tempFile = File(cacheDir, finalName)
+
+            contentResolver.openInputStream(uri)?.use { input ->
+                tempFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+
+            android.util.Log.d("GeogramFileViewer", "File copied to: ${tempFile.absolutePath}")
+
+            fileViewerMethodChannel?.invokeMethod("onFileReceived", mapOf(
+                "path" to tempFile.absolutePath,
+                "mimeType" to mimeType,
+            ))
+        } catch (e: Exception) {
+            android.util.Log.e("GeogramFileViewer", "Error handling file view intent: ${e.message}")
+        }
+    }
+
+    /**
+     * Check if MIME type is supported for file viewing
+     */
+    private fun isSupportedViewerMimeType(mimeType: String) = when {
+        mimeType.startsWith("image/jpeg") || mimeType.startsWith("image/png") -> true
+        mimeType.startsWith("video/") -> true
+        mimeType == "application/pdf" -> true
+        else -> false
+    }
+
+    /**
+     * Get file name from content URI
+     */
+    private fun getFileNameFromUri(uri: Uri): String? {
+        if (uri.scheme == "content") {
+            contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (idx >= 0) return cursor.getString(idx)
+                }
+            }
+        }
+        return uri.lastPathSegment
+    }
+
+    /**
+     * Get file extension for MIME type
+     */
+    private fun getExtensionForMimeType(mimeType: String) = when (mimeType) {
+        "image/jpeg" -> ".jpg"
+        "image/png" -> ".png"
+        "video/mp4" -> ".mp4"
+        "video/x-msvideo" -> ".avi"
+        "video/x-matroska" -> ".mkv"
+        "video/quicktime" -> ".mov"
+        "video/x-ms-wmv" -> ".wmv"
+        "video/x-flv" -> ".flv"
+        "video/webm" -> ".webm"
+        "application/pdf" -> ".pdf"
+        else -> null
+    }
+
     override fun onDestroy() {
         // Clear method channel to prevent stale reference when engine is destroyed
         BLEForegroundService.clearMethodChannel()
@@ -411,6 +507,8 @@ class MainActivity : FlutterActivity() {
         usbAoaPlugin?.dispose()
         usbAoaPlugin = null
         usbMethodChannel = null
+        fileViewerMethodChannel = null
+        recentFilesMethodChannel = null
         super.onDestroy()
     }
 
@@ -519,6 +617,113 @@ class MainActivity : FlutterActivity() {
             "zip" -> "application/zip"
             "apk" -> "application/vnd.android.package-archive"
             else -> null
+        }
+    }
+
+    /**
+     * Set up the recent files method channel for MediaStore queries.
+     */
+    private fun setupRecentFilesChannel(flutterEngine: FlutterEngine) {
+        recentFilesMethodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, RECENT_FILES_CHANNEL)
+        recentFilesMethodChannel?.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getRecentFiles" -> {
+                    val limit = call.argument<Int>("limit") ?: 100
+                    val files = queryRecentFiles(limit)
+                    result.success(files)
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    /**
+     * Query MediaStore for recently modified files.
+     * Queries specific media collections (Images, Video, Audio, Downloads) instead of
+     * MediaStore.Files to work around Android scoped storage restrictions that only
+     * show files created by our app in the Files collection.
+     */
+    private fun queryRecentFiles(limit: Int): List<Map<String, Any?>> {
+        val allFiles = mutableListOf<Map<String, Any?>>()
+
+        // Query each media collection separately (scoped storage shows all files in these)
+        val collections = mutableListOf(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+        )
+
+        // Add Downloads collection (API 29+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            collections.add(MediaStore.Downloads.EXTERNAL_CONTENT_URI)
+        }
+
+        val projection = arrayOf(
+            MediaStore.MediaColumns.DISPLAY_NAME,
+            MediaStore.MediaColumns.SIZE,
+            MediaStore.MediaColumns.DATE_MODIFIED,
+            MediaStore.MediaColumns.DATA,
+            MediaStore.MediaColumns.MIME_TYPE
+        )
+
+        for (collection in collections) {
+            try {
+                queryMediaCollection(collection, projection, limit, allFiles)
+            } catch (e: Exception) {
+                android.util.Log.w("RecentFiles", "Error querying $collection: ${e.message}")
+            }
+        }
+
+        // Sort all results by modification date (descending) and take top N
+        return allFiles
+            .sortedByDescending { it["modified"] as? Long ?: 0L }
+            .take(limit)
+    }
+
+    /**
+     * Query a single media collection and append results to the list.
+     */
+    private fun queryMediaCollection(
+        collection: Uri,
+        projection: Array<String>,
+        limit: Int,
+        results: MutableList<Map<String, Any?>>
+    ) {
+        val sortColumn = MediaStore.MediaColumns.DATE_MODIFIED
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // API 26+: Use Bundle-based query with proper LIMIT
+            val queryArgs = Bundle().apply {
+                putStringArray(ContentResolver.QUERY_ARG_SORT_COLUMNS, arrayOf(sortColumn))
+                putInt(ContentResolver.QUERY_ARG_SORT_DIRECTION, ContentResolver.QUERY_SORT_DIRECTION_DESCENDING)
+                putInt(ContentResolver.QUERY_ARG_LIMIT, limit)
+            }
+            contentResolver.query(collection, projection, queryArgs, null)
+        } else {
+            // API < 26: Use sortOrder string (LIMIT may not work on all devices)
+            val sortOrder = "$sortColumn DESC"
+            contentResolver.query(collection, projection, null, null, sortOrder)
+        }?.use { cursor ->
+            val nameIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+            val sizeIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+            val modifiedIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
+            val pathIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA)
+            val mimeIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
+
+            var count = 0
+            while (cursor.moveToNext() && count < limit) {
+                val path = cursor.getString(pathIdx)
+                if (path.isNullOrEmpty()) continue
+
+                results.add(mapOf(
+                    "name" to cursor.getString(nameIdx),
+                    "size" to cursor.getLong(sizeIdx),
+                    "modified" to (cursor.getLong(modifiedIdx) * 1000),  // Convert to milliseconds
+                    "path" to path,
+                    "mimeType" to cursor.getString(mimeIdx)
+                ))
+                count++
+            }
         }
     }
 }

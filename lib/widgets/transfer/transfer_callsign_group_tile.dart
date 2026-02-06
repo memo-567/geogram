@@ -27,6 +27,18 @@ class TransferCallsignGroupTile extends StatefulWidget {
   final void Function(String, bool)? onTransferSelected;
   final bool initiallyExpanded;
 
+  /// Callback when user taps to open a file (for completed transfers)
+  final void Function(Transfer)? onOpenFile;
+
+  /// Callback when user taps "Open folder" in the menu
+  final void Function(Transfer)? onOpenFolder;
+
+  /// Callback when user taps "Delete" in the menu
+  final void Function(Transfer)? onDelete;
+
+  /// Callback when user taps "Copy path" in the menu
+  final void Function(Transfer)? onCopyPath;
+
   const TransferCallsignGroupTile({
     super.key,
     required this.group,
@@ -39,6 +51,10 @@ class TransferCallsignGroupTile extends StatefulWidget {
     this.selectedIds = const {},
     this.onTransferSelected,
     this.initiallyExpanded = false,
+    this.onOpenFile,
+    this.onOpenFolder,
+    this.onDelete,
+    this.onCopyPath,
   });
 
   @override
@@ -278,11 +294,26 @@ class _TransferCallsignGroupTileState extends State<TransferCallsignGroupTile>
     bool isSelected,
     bool isLast,
   ) {
+    // Determine if this transfer can be opened (completed downloads)
+    final canOpenFile = transfer.isCompleted &&
+        transfer.direction == TransferDirection.download &&
+        widget.onOpenFile != null;
+
+    // Show menu for completed/failed transfers
+    final showMenu = (transfer.isCompleted || transfer.isFailed) &&
+        (widget.onOpenFolder != null ||
+            widget.onDelete != null ||
+            widget.onCopyPath != null);
+
     return InkWell(
       onTap: () {
         if (widget.selectionMode) {
           widget.onTransferSelected?.call(transfer.id, !isSelected);
+        } else if (canOpenFile) {
+          // Open file for completed downloads
+          widget.onOpenFile?.call(transfer);
         } else {
+          // Show transfer details
           widget.onTransferTap?.call(transfer);
         }
       },
@@ -336,13 +367,76 @@ class _TransferCallsignGroupTileState extends State<TransferCallsignGroupTile>
             const SizedBox(width: 8),
             // Status/progress
             _buildCompactStatus(theme, transfer),
-            // Actions
+            // Actions (for active transfers) or Menu (for completed/failed)
             if (!widget.selectionMode) ...[
-              _buildCompactActions(transfer),
+              if (transfer.isActive || transfer.isPending)
+                _buildCompactActions(transfer)
+              else if (showMenu)
+                _buildTransferMenu(transfer)
+              else
+                const SizedBox(width: 32),
             ],
           ],
         ),
       ),
+    );
+  }
+
+  /// Build the three-dot menu for completed/failed transfers
+  Widget _buildTransferMenu(Transfer transfer) {
+    return PopupMenuButton<String>(
+      icon: const Icon(Icons.more_vert, size: 18),
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+      tooltip: 'More options',
+      onSelected: (value) {
+        switch (value) {
+          case 'open_folder':
+            widget.onOpenFolder?.call(transfer);
+            break;
+          case 'delete':
+            widget.onDelete?.call(transfer);
+            break;
+          case 'copy_path':
+            widget.onCopyPath?.call(transfer);
+            break;
+        }
+      },
+      itemBuilder: (context) => [
+        if (widget.onOpenFolder != null)
+          const PopupMenuItem(
+            value: 'open_folder',
+            child: Row(
+              children: [
+                Icon(Icons.folder_open, size: 18),
+                SizedBox(width: 8),
+                Text('Open folder'),
+              ],
+            ),
+          ),
+        if (widget.onDelete != null)
+          const PopupMenuItem(
+            value: 'delete',
+            child: Row(
+              children: [
+                Icon(Icons.delete, size: 18),
+                SizedBox(width: 8),
+                Text('Delete'),
+              ],
+            ),
+          ),
+        if (widget.onCopyPath != null)
+          const PopupMenuItem(
+            value: 'copy_path',
+            child: Row(
+              children: [
+                Icon(Icons.copy, size: 18),
+                SizedBox(width: 8),
+                Text('Copy path'),
+              ],
+            ),
+          ),
+      ],
     );
   }
 

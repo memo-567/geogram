@@ -111,6 +111,9 @@ enum DebugAction {
   /// Open station chat app and first chat room
   openStationChat,
 
+  /// Open external file in viewer (images, videos, PDFs from Android intent)
+  openExternalFile,
+
   /// Open local chat collection (for testing encrypted storage)
   openLocalChat,
 
@@ -508,6 +511,14 @@ class DebugController {
     triggerAction(
       DebugAction.openFlasherMonitor,
       params: {'device_path': devicePath},
+    );
+  }
+
+  /// Trigger external file viewer navigation
+  void triggerOpenExternalFile({required String path, String? mimeType}) {
+    triggerAction(
+      DebugAction.openExternalFile,
+      params: {'path': path, 'mimeType': mimeType},
     );
   }
 

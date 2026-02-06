@@ -127,7 +127,11 @@ class LogService {
   }
   Future<String?> readCrashLog() async => null;
   Future<void> clearCrashLog() async {}
+  @Deprecated('Use switchToProfile(callsign) instead for profile-specific logs')
   Future<void> adoptStorageConfigLogsDir() async {}
+
+  /// Switch to profile-specific log directory (no-op on web)
+  Future<void> switchToProfile(String callsign) async {}
   Future<Map<String, dynamic>?> readHeartbeat() async => null;
 
   void clear() {

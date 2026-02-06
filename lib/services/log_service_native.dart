@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, compute;
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'storage_config.dart';
 
 /// Result of reading log file in isolate
@@ -60,8 +59,12 @@ class LogService {
   factory LogService() => _instance;
   LogService._internal();
 
+  static const int _maxLogFileSizeBytes = 30 * 1024 * 1024; // 30MB
+  static const int _pruneTargetSizeBytes = 20 * 1024 * 1024; // Prune to 20MB
+
   final int maxLogMessages = 1000;
   final Queue<String> _logMessages = Queue<String>();
+  int _writeCount = 0;
   final List<Function(String)> _listeners = [];
   Directory? _logsDir;
   IOSink? _logSink;
@@ -79,40 +82,56 @@ class LogService {
 
   Future<void> init() async {
     if (_initialized) return;
+    _initialized = true;
 
     // On web, we only use in-memory logging
     if (kIsWeb) {
-      _initialized = true;
       print('=== Application Started (Web): ${DateTime.now()} ===');
       return;
     }
 
-    try {
-      // Prefer StorageConfig location when available
-      String basePath;
-      if (StorageConfig().isInitialized) {
-        basePath = StorageConfig().logsDir;
-      } else {
-        final appDir = await getApplicationDocumentsDirectory();
-        basePath = p.join(appDir.path, 'geogram', 'logs');
-      }
+    // On native platforms, file logging is deferred until switchToProfile() is called.
+    // This ensures logs go to the correct profile-specific directory.
+    // In-memory logging is available immediately.
+    print('=== Application Started (awaiting profile): ${DateTime.now()} ===');
+  }
 
-      _logsDir = Directory(basePath);
-      if (!await _logsDir!.exists()) {
-        await _logsDir!.create(recursive: true);
-      }
+  /// Switch to profile-specific log directory
+  ///
+  /// Call this when a profile is activated to start writing logs to the
+  /// profile's workspace: {devicesDir}/{CALLSIGN}/logs/
+  Future<void> switchToProfile(String callsign) async {
+    if (kIsWeb || !StorageConfig().isInitialized) return;
 
-      _openSinks(DateTime.now());
-      _initialized = true;
+    final profileLogsDir = StorageConfig().logsDirForProfile(callsign);
 
-      // Write startup marker
-      _logSink?.writeln('\n=== Application Started: ${DateTime.now()} ===');
-      await _logSink?.flush();
-    } catch (e) {
-      // Can't use log() here as we're in init(), use print on web or stderr on native
-      print('Error initializing log file: $e');
-      _initialized = true; // Still mark as initialized to allow in-memory logging
+    // Check if we're already using this profile's logs directory
+    if (_logsDir != null && p.equals(_logsDir!.path, profileLogsDir)) {
+      return;
     }
+
+    // Close existing sinks if any
+    try {
+      await _logSink?.flush();
+      await _logSink?.close();
+      await _crashSink?.flush();
+      await _crashSink?.close();
+    } catch (_) {}
+
+    _logSink = null;
+    _crashSink = null;
+    _currentLogDay = null;
+
+    // Set up profile-specific logs directory
+    _logsDir = Directory(profileLogsDir);
+    if (!await _logsDir!.exists()) {
+      await _logsDir!.create(recursive: true);
+    }
+
+    // Open sinks for current day
+    _openSinks(DateTime.now());
+    _logSink?.writeln('\n=== Profile activated: $callsign at ${DateTime.now()} ===');
+    await _logSink?.flush();
   }
 
   void _rotateIfNeeded(DateTime now) {
@@ -139,9 +158,56 @@ class LogService {
       if (isCrash) {
         _crashSink?.writeln(message);
       }
+
+      // Check file size every 1000 writes
+      _writeCount++;
+      if (_writeCount >= 1000) {
+        _writeCount = 0;
+        _checkAndPruneLogFile(); // Fire and forget
+      }
     } catch (e) {
       print('Error writing to log file: $e');
     }
+  }
+
+  Future<void> _checkAndPruneLogFile() async {
+    if (kIsWeb || _logsDir == null || _currentLogDay == null) return;
+
+    final now = _currentLogDay!;
+    final dateStr =
+        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    final logPath = p.join(_logsDir!.path, '${now.year}', 'log-$dateStr.txt');
+    final logFile = File(logPath);
+
+    if (!await logFile.exists()) return;
+
+    final size = await logFile.length();
+    if (size <= _maxLogFileSizeBytes) return;
+
+    // Close current sink
+    await _logSink?.flush();
+    await _logSink?.close();
+    _logSink = null;
+
+    // Read file, keep last ~20MB worth of lines
+    final content = await logFile.readAsString();
+    final lines = content.split('\n');
+
+    // Estimate bytes per line and calculate how many lines to keep
+    final avgLineSize = size ~/ lines.length;
+    final linesToKeep = _pruneTargetSizeBytes ~/ avgLineSize;
+
+    final prunedLines = lines.length > linesToKeep
+        ? lines.sublist(lines.length - linesToKeep)
+        : lines;
+
+    // Write pruned content
+    final prunedContent = prunedLines.join('\n');
+    await logFile.writeAsString(
+        '=== Log pruned at ${DateTime.now().toIso8601String()} (was ${(size / 1024 / 1024).toStringAsFixed(1)}MB) ===\n$prunedContent');
+
+    // Reopen sink
+    _logSink = logFile.openWrite(mode: FileMode.append);
   }
 
   void _openSinks(DateTime now) {
@@ -298,31 +364,10 @@ class LogService {
     }
   }
 
+  @Deprecated('Use switchToProfile(callsign) instead for profile-specific logs')
   Future<void> adoptStorageConfigLogsDir() async {
-    if (kIsWeb || !StorageConfig().isInitialized) return;
-    final desiredPath = StorageConfig().logsDir;
-
-    if (_logsDir != null && p.equals(_logsDir!.path, desiredPath)) {
-      return;
-    }
-
-    try {
-      await _logSink?.flush();
-      await _logSink?.close();
-      await _crashSink?.flush();
-      await _crashSink?.close();
-    } catch (_) {}
-
-    _logSink = null;
-    _crashSink = null;
-    _currentLogDay = null;
-
-    _logsDir = Directory(desiredPath);
-    if (!await _logsDir!.exists()) {
-      await _logsDir!.create(recursive: true);
-    }
-
-    _openSinks(DateTime.now());
+    // This method is deprecated. Logs are now per-profile.
+    // Call switchToProfile(callsign) instead.
   }
 
   Future<String?> readTodayLog() async {

@@ -54,5 +54,6 @@
   "move_to_folder": "Move to Folder",
   "no_folder": "No Folder (Root)",
   "code_moved": "Code moved successfully",
-  "scanning_not_supported": "Camera scanning not available on this platform"
+  "scanning_not_supported": "Camera scanning not available on this platform",
+  "fullscreen": "Fullscreen"
 }

@@ -50,6 +50,9 @@ This document catalogs reusable UI components available in the Geogram codebase.
 ### Tree Widgets
 - [FolderTreeWidget](#foldertreewidget) - Folder navigation
 
+### QR Code Widgets
+- [QrPreviewWidget](#qrpreviewwidget) - QR code preview with customizations
+
 ### Message Widgets
 - [MessageBubbleWidget](#messagebubblewidget) - Chat bubbles
 - [MessageInputWidget](#messageinputwidget) - Message composer
@@ -1455,6 +1458,70 @@ FolderTreeWidget(
 - Drag & drop support
 - Context menu for folder actions
 - Auto-expand selected path
+
+---
+
+## QR Code Widgets
+
+### QrPreviewWidget
+
+**File:** `lib/widgets/qr_preview_widget.dart`
+
+Reusable widget for displaying QR code previews with customization support (colors, rounded modules, logos).
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `code` | QrCode | Yes | QR code model with content and customizations |
+| `size` | double | No | Size of the preview (default: 48) |
+| `showShadow` | bool | No | Show shadow decoration (default: false) |
+| `showContainer` | bool | No | Show container with border/shadow (default: true) |
+
+**Usage:**
+```dart
+// Thumbnail in list
+QrPreviewWidget(code: code, size: 48)
+
+// Detail view with shadow
+QrPreviewWidget(
+  code: code,
+  size: 200,
+  showShadow: true,
+)
+```
+
+**Features:**
+- Displays stored base64 PNG for all codes (preserves visual customizations and notes)
+- Falls back to live rendering for QR codes (with customization support)
+- Falls back to flutter_zxing re-encoding for other formats
+- Automatic fallback to placeholder for barcodes or invalid images
+
+### BarcodeEncoderService
+
+**File:** `lib/services/barcode_encoder_service.dart`
+
+Utility service for encoding barcodes/QR codes to PNG and adding notes to images.
+
+**Static Methods:**
+| Method | Description |
+|--------|-------------|
+| `encodeToImage({content, format, width, height, margin})` | Encode content as barcode/QR to PNG bytes. Handles flexible dimensions (PDF417). |
+| `addNotesToImage(pngBytes, notes, {fontSize, bold})` | Add notes text below a PNG image. fontSize: 14/24/48. Bold simulated via offset. |
+| `is1DFormat(format)` | Check if ZXing format is a 1D barcode |
+| `getZxingFormat(name)` | Convert ZXing format name string to int constant |
+
+**Usage:**
+```dart
+// Encode a barcode
+final png = BarcodeEncoderService.encodeToImage(
+  content: 'Hello', format: Format.qrCode, width: 300,
+);
+
+// Add notes to an existing image
+final withNotes = BarcodeEncoderService.addNotesToImage(
+  pngBytes, 'My note', fontSize: 24, bold: true,
+);
+```
 
 ---
 

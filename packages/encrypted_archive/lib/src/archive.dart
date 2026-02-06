@@ -29,6 +29,7 @@ class EncryptedArchive {
   final MasterKeyMaterial _keys;
 
   bool _closed = false;
+  Completer<void>? _writeLock;
 
   EncryptedArchive._({
     required String path,
@@ -40,6 +41,25 @@ class EncryptedArchive {
         _options = options,
         _keyDerivation = KeyDerivation(options),
         _keys = keys;
+
+  /// Execute an action with exclusive write access.
+  /// Prevents concurrent transactions from causing SQLite errors.
+  Future<T> _withWriteLock<T>(Future<T> Function() action) async {
+    // Wait for any existing lock
+    while (_writeLock != null) {
+      await _writeLock!.future;
+    }
+
+    // Acquire lock
+    _writeLock = Completer<void>();
+    try {
+      return await action();
+    } finally {
+      final lock = _writeLock;
+      _writeLock = null;
+      lock?.complete();
+    }
+  }
 
   /// Archive options.
   ArchiveOptions get options => _options;
@@ -252,6 +272,7 @@ class EncryptedArchive {
     ProgressCallback? onProgress,
     CancellationToken? cancellation,
   }) async {
+    return _withWriteLock(() async {
     _ensureOpen();
     final normalizedPath = _normalizePath(path);
 
@@ -390,6 +411,7 @@ class EncryptedArchive {
       _db.execute('ROLLBACK');
       rethrow;
     }
+    });
   }
 
   /// Add a file from disk.
@@ -702,6 +724,7 @@ class EncryptedArchive {
 
   /// Permanently delete soft-deleted entries and reclaim space.
   Future<int> vacuum({ProgressCallback? onProgress}) async {
+    return _withWriteLock(() async {
     _ensureOpen();
 
     // Get deleted file IDs
@@ -750,6 +773,7 @@ class EncryptedArchive {
     _db.execute('VACUUM');
 
     return count;
+    });
   }
 
   /// Verify archive integrity.

@@ -10,6 +10,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../models/file_browser_cache_models.dart';
 import '../pages/transfer_send_page.dart';
 import '../services/file_browser_cache_service.dart';
+import '../services/recent_files_service.dart';
 import '../util/video_metadata_extractor.dart';
 
 /// Sort mode for file/folder listing
@@ -25,12 +26,14 @@ class StorageLocation {
   final String path;
   final IconData icon;
   final bool isRemovable;
+  final bool isVirtual;
 
   const StorageLocation({
     required this.name,
     required this.path,
     required this.icon,
     this.isRemovable = false,
+    this.isVirtual = false,
   });
 }
 
@@ -143,10 +146,21 @@ class FileFolderPickerState extends State<FileFolderPicker> {
   late String _baseDirectory;
 
   int get _bestStorageMatch {
+    // If in a virtual folder, find the matching virtual location
+    if (_isVirtualFolder && _virtualFolderType != null) {
+      for (int i = 0; i < _storageLocations.length; i++) {
+        final loc = _storageLocations[i];
+        if (loc.isVirtual && loc.path == 'virtual://$_virtualFolderType') {
+          return i;
+        }
+      }
+    }
+
     int bestIndex = -1;
     int bestLength = -1;
     for (int i = 0; i < _storageLocations.length; i++) {
       final loc = _storageLocations[i];
+      if (loc.isVirtual) continue;  // Skip virtual locations for path matching
       if (_currentDirectory.path.startsWith(loc.path) &&
           loc.path.length > bestLength) {
         bestLength = loc.path.length;
@@ -165,6 +179,8 @@ class FileFolderPickerState extends State<FileFolderPicker> {
   final FileBrowserCacheService _cacheService = FileBrowserCacheService();
   bool _cacheInitialized = false;
   final FocusNode _keyboardFocusNode = FocusNode();
+  bool _isVirtualFolder = false;
+  String? _virtualFolderType;
 
   @override
   void initState() {
@@ -250,6 +266,14 @@ class FileFolderPickerState extends State<FileFolderPicker> {
       await _addLinuxMountPoints(locations, '/mnt');
       await _addLinuxMountPoints(locations, '/run/media');
     } else if (Platform.isAndroid) {
+      // Add "Recent" virtual folder first (Android only, uses MediaStore)
+      locations.add(const StorageLocation(
+        name: 'Recent',
+        path: 'virtual://recent',
+        icon: Icons.history_rounded,
+        isVirtual: true,
+      ));
+
       locations.add(const StorageLocation(
         name: 'Internal',
         path: '/storage/emulated/0',
@@ -557,7 +581,34 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     });
   }
 
+  Future<void> _loadVirtualFolder(String virtualPath) async {
+    final type = virtualPath.replaceFirst('virtual://', '');
+
+    setState(() {
+      _isVirtualFolder = true;
+      _virtualFolderType = type;
+      _isLoading = true;
+      _items = [];
+      _selectedPaths.clear();
+      _error = null;
+    });
+
+    if (type == 'recent') {
+      final files = await RecentFilesService().getRecentFiles();
+      if (mounted) {
+        setState(() {
+          _items = files;
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
   void _navigateTo(Directory dir) {
+    // Exiting virtual folder when navigating to a real directory
+    _isVirtualFolder = false;
+    _virtualFolderType = null;
+
     setState(() {
       _currentDirectory = dir;
       _selectedPaths.clear();
@@ -566,6 +617,14 @@ class FileFolderPickerState extends State<FileFolderPicker> {
   }
 
   void _navigateUp() {
+    // Exiting virtual folder - go to home directory
+    if (_isVirtualFolder) {
+      _isVirtualFolder = false;
+      _virtualFolderType = null;
+      _navigateTo(Directory(_baseDirectory));
+      return;
+    }
+
     final parent = _currentDirectory.parent;
     if (parent.path != _currentDirectory.path) {
       _navigateTo(parent);
@@ -840,7 +899,7 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     final colorScheme = theme.colorScheme;
 
     return PopScope(
-      canPop: _currentDirectory.path == _baseDirectory,
+      canPop: !_isVirtualFolder && _currentDirectory.path == _baseDirectory,
       onPopInvokedWithResult: (didPop, result) {
         if (!didPop && _canNavigateUp) {
           _navigateUp();
@@ -970,8 +1029,14 @@ class FileFolderPickerState extends State<FileFolderPicker> {
             borderRadius: BorderRadius.circular(12),
             child: InkWell(
               onTap: () {
-                _baseDirectory = location.path;
-                _navigateTo(Directory(location.path));
+                if (location.isVirtual) {
+                  _loadVirtualFolder(location.path);
+                } else {
+                  _isVirtualFolder = false;
+                  _virtualFolderType = null;
+                  _baseDirectory = location.path;
+                  _navigateTo(Directory(location.path));
+                }
               },
               borderRadius: BorderRadius.circular(12),
               child: Container(
@@ -1023,6 +1088,21 @@ class FileFolderPickerState extends State<FileFolderPicker> {
   }
 
   Widget _buildBreadcrumb(ThemeData theme) {
+    // Special breadcrumb for virtual folders
+    if (_isVirtualFolder) {
+      final name = _virtualFolderType == 'recent' ? 'Recent' : _virtualFolderType ?? 'Virtual';
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: Text(
+          name,
+          style: theme.textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w600,
+            color: theme.colorScheme.primary,
+          ),
+        ),
+      );
+    }
+
     final parts = _currentDirectory.path.split(Platform.pathSeparator);
     if (parts.first.isEmpty) parts[0] = '/';
 
@@ -1099,6 +1179,10 @@ class FileFolderPickerState extends State<FileFolderPicker> {
   }
 
   bool get _canNavigateUp {
+    // Virtual folders can navigate "up" to exit back to home
+    if (_isVirtualFolder) {
+      return true;
+    }
     // At filesystem root
     if (_currentDirectory.parent.path == _currentDirectory.path) {
       return false;
@@ -1542,6 +1626,7 @@ class FileFolderPickerState extends State<FileFolderPicker> {
   }
 
   Widget _buildEmptyState(ThemeData theme) {
+    final isRecent = _isVirtualFolder && _virtualFolderType == 'recent';
     return Column(
       children: [
         if (_canNavigateUp) _buildParentDirListItem(theme),
@@ -1558,14 +1643,14 @@ class FileFolderPickerState extends State<FileFolderPicker> {
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Icon(
-                    Icons.folder_open_rounded,
+                    isRecent ? Icons.history_rounded : Icons.folder_open_rounded,
                     size: 40,
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
                 const SizedBox(height: 16),
                 Text(
-                  'This folder is empty',
+                  isRecent ? 'No recent files' : 'This folder is empty',
                   style: theme.textTheme.titleMedium?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
