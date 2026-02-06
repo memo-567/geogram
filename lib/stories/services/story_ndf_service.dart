@@ -11,6 +11,7 @@ import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 
 import '../../services/log_service.dart';
+import '../../services/profile_storage.dart';
 import '../../work/models/ndf_permission.dart';
 import '../models/story.dart';
 import '../models/story_content.dart';
@@ -19,6 +20,19 @@ import '../models/story_scene.dart';
 /// Service for reading and writing Story NDF documents
 class StoryNdfService {
   final _log = LogService();
+  final ProfileStorage? storage;
+
+  StoryNdfService({this.storage});
+
+  /// Convert an absolute file path to a relative path for ProfileStorage
+  String _toRelative(String absolutePath) {
+    if (storage == null) return absolutePath;
+    final base = storage!.basePath;
+    if (absolutePath.startsWith('$base/')) {
+      return absolutePath.substring(base.length + 1);
+    }
+    return absolutePath;
+  }
 
   // ============================================================
   // STORY METADATA METHODS
@@ -27,10 +41,16 @@ class StoryNdfService {
   /// Read story metadata from NDF file
   Future<Story?> readStory(String filePath) async {
     try {
-      final file = File(filePath);
-      if (!await file.exists()) return null;
+      Uint8List? bytes;
+      if (storage != null) {
+        bytes = await storage!.readBytes(_toRelative(filePath));
+      } else {
+        final file = File(filePath);
+        if (!await file.exists()) return null;
+        bytes = await file.readAsBytes();
+      }
+      if (bytes == null) return null;
 
-      final bytes = await file.readAsBytes();
       final archive = ZipDecoder().decodeBytes(bytes);
 
       for (final entry in archive) {
@@ -52,10 +72,16 @@ class StoryNdfService {
   /// Read story content from NDF file
   Future<StoryContent?> readStoryContent(String filePath) async {
     try {
-      final file = File(filePath);
-      if (!await file.exists()) return null;
+      Uint8List? bytes;
+      if (storage != null) {
+        bytes = await storage!.readBytes(_toRelative(filePath));
+      } else {
+        final file = File(filePath);
+        if (!await file.exists()) return null;
+        bytes = await file.readAsBytes();
+      }
+      if (bytes == null) return null;
 
-      final bytes = await file.readAsBytes();
       final archive = ZipDecoder().decodeBytes(bytes);
 
       // First read main.json
@@ -158,9 +184,13 @@ class StoryNdfService {
       throw Exception('Failed to encode story NDF archive');
     }
 
-    final file = File(outputPath);
-    await file.parent.create(recursive: true);
-    await file.writeAsBytes(zipData);
+    if (storage != null) {
+      await storage!.writeBytes(_toRelative(outputPath), Uint8List.fromList(zipData));
+    } else {
+      final file = File(outputPath);
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(zipData);
+    }
 
     _log.log('StoryNdfService: Created story at $outputPath');
     return outputPath;
@@ -369,10 +399,16 @@ class StoryNdfService {
 
   Future<Uint8List?> _readArchiveFile(String filePath, String archivePath) async {
     try {
-      final file = File(filePath);
-      if (!await file.exists()) return null;
+      Uint8List? bytes;
+      if (storage != null) {
+        bytes = await storage!.readBytes(_toRelative(filePath));
+      } else {
+        final file = File(filePath);
+        if (!await file.exists()) return null;
+        bytes = await file.readAsBytes();
+      }
+      if (bytes == null) return null;
 
-      final bytes = await file.readAsBytes();
       final archive = ZipDecoder().decodeBytes(bytes);
 
       for (final entry in archive) {
@@ -389,12 +425,17 @@ class StoryNdfService {
 
   Future<List<String>> _listArchiveFiles(String filePath) async {
     try {
-      final file = File(filePath);
-      if (!await file.exists()) return [];
+      Uint8List? bytes;
+      if (storage != null) {
+        bytes = await storage!.readBytes(_toRelative(filePath));
+      } else {
+        final file = File(filePath);
+        if (!await file.exists()) return [];
+        bytes = await file.readAsBytes();
+      }
+      if (bytes == null) return [];
 
-      final bytes = await file.readAsBytes();
       final archive = ZipDecoder().decodeBytes(bytes);
-
       return archive.map((e) => e.name).toList();
     } catch (e) {
       _log.log('StoryNdfService: Error listing archive: $e');
@@ -411,13 +452,21 @@ class StoryNdfService {
   }
 
   Future<void> _updateArchiveFilesBytes(String filePath, Map<String, Uint8List> files) async {
-    final file = File(filePath);
-    if (!await file.exists()) {
+    Uint8List? existingBytes;
+    if (storage != null) {
+      existingBytes = await storage!.readBytes(_toRelative(filePath));
+    } else {
+      final file = File(filePath);
+      if (!await file.exists()) {
+        throw Exception('NDF file not found: $filePath');
+      }
+      existingBytes = await file.readAsBytes();
+    }
+    if (existingBytes == null) {
       throw Exception('NDF file not found: $filePath');
     }
 
-    final bytes = await file.readAsBytes();
-    final archive = ZipDecoder().decodeBytes(bytes);
+    final archive = ZipDecoder().decodeBytes(existingBytes);
 
     final newArchive = Archive();
     final addedPaths = <String>{};
@@ -445,15 +494,25 @@ class StoryNdfService {
       throw Exception('Failed to encode NDF archive');
     }
 
-    await file.writeAsBytes(zipData);
+    if (storage != null) {
+      await storage!.writeBytes(_toRelative(filePath), Uint8List.fromList(zipData));
+    } else {
+      await File(filePath).writeAsBytes(zipData);
+    }
   }
 
   Future<void> _deleteArchiveFiles(String filePath, List<String> paths) async {
-    final file = File(filePath);
-    if (!await file.exists()) return;
+    Uint8List? existingBytes;
+    if (storage != null) {
+      existingBytes = await storage!.readBytes(_toRelative(filePath));
+    } else {
+      final file = File(filePath);
+      if (!await file.exists()) return;
+      existingBytes = await file.readAsBytes();
+    }
+    if (existingBytes == null) return;
 
-    final bytes = await file.readAsBytes();
-    final archive = ZipDecoder().decodeBytes(bytes);
+    final archive = ZipDecoder().decodeBytes(existingBytes);
 
     final newArchive = Archive();
     final pathSet = paths.toSet();
@@ -469,6 +528,10 @@ class StoryNdfService {
       throw Exception('Failed to encode NDF archive');
     }
 
-    await file.writeAsBytes(zipData);
+    if (storage != null) {
+      await storage!.writeBytes(_toRelative(filePath), Uint8List.fromList(zipData));
+    } else {
+      await File(filePath).writeAsBytes(zipData);
+    }
   }
 }

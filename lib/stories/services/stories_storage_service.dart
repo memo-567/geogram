@@ -4,8 +4,10 @@
  */
 
 import 'dart:io';
+import 'dart:typed_data';
 
 import '../../services/log_service.dart';
+import '../../services/profile_storage.dart';
 import '../models/story.dart';
 import '../models/story_content.dart';
 import '../models/story_scene.dart';
@@ -14,19 +16,36 @@ import 'story_ndf_service.dart';
 /// Service for managing story files in a collection
 class StoriesStorageService {
   final String basePath;
+  final ProfileStorage? storage;
   final _log = LogService();
-  final _ndfService = StoryNdfService();
+  late final StoryNdfService _ndfService;
 
-  StoriesStorageService({required this.basePath});
+  StoriesStorageService({required this.basePath, this.storage}) {
+    _ndfService = StoryNdfService(storage: storage);
+  }
+
+  /// Convert an absolute path to a relative path for ProfileStorage
+  String _toRelative(String absolutePath) {
+    if (storage == null) return absolutePath;
+    final base = storage!.basePath;
+    if (absolutePath.startsWith('$base/')) {
+      return absolutePath.substring(base.length + 1);
+    }
+    return absolutePath;
+  }
 
   /// Get the stories directory path
   String get storiesDir => '$basePath/stories';
 
   /// Initialize the storage (create directories if needed)
   Future<void> initialize() async {
-    final dir = Directory(storiesDir);
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
+    if (storage != null) {
+      await storage!.createDirectory(_toRelative(storiesDir));
+    } else {
+      final dir = Directory(storiesDir);
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
     }
   }
 
@@ -34,16 +53,34 @@ class StoriesStorageService {
   Future<List<Story>> loadStories() async {
     final stories = <Story>[];
 
-    final dir = Directory(storiesDir);
-    if (!await dir.exists()) {
-      return stories;
-    }
+    if (storage != null) {
+      final relDir = _toRelative(storiesDir);
+      final exists = await storage!.directoryExists(relDir);
+      if (!exists) return stories;
 
-    await for (final entity in dir.list()) {
-      if (entity is File && entity.path.endsWith('.ndf')) {
-        final story = await _ndfService.readStory(entity.path);
-        if (story != null) {
-          stories.add(story.copyWith(filePath: entity.path));
+      final entries = await storage!.listDirectory(relDir);
+      for (final entry in entries) {
+        if (!entry.isDirectory && entry.name.endsWith('.ndf')) {
+          // Construct the absolute path for the NDF service
+          final absPath = '$storiesDir/${entry.name}';
+          final story = await _ndfService.readStory(absPath);
+          if (story != null) {
+            stories.add(story.copyWith(filePath: absPath));
+          }
+        }
+      }
+    } else {
+      final dir = Directory(storiesDir);
+      if (!await dir.exists()) {
+        return stories;
+      }
+
+      await for (final entity in dir.list()) {
+        if (entity is File && entity.path.endsWith('.ndf')) {
+          final story = await _ndfService.readStory(entity.path);
+          if (story != null) {
+            stories.add(story.copyWith(filePath: entity.path));
+          }
         }
       }
     }
@@ -102,10 +139,18 @@ class StoriesStorageService {
     var path = basePath;
     var counter = 2;
 
-    while (await File(path).exists()) {
-      final nameWithoutExt = basePath.substring(0, basePath.length - 4);
-      path = '$nameWithoutExt-$counter.ndf';
-      counter++;
+    if (storage != null) {
+      while (await storage!.exists(_toRelative(path))) {
+        final nameWithoutExt = basePath.substring(0, basePath.length - 4);
+        path = '$nameWithoutExt-$counter.ndf';
+        counter++;
+      }
+    } else {
+      while (await File(path).exists()) {
+        final nameWithoutExt = basePath.substring(0, basePath.length - 4);
+        path = '$nameWithoutExt-$counter.ndf';
+        counter++;
+      }
     }
 
     return path;
@@ -142,7 +187,16 @@ class StoriesStorageService {
         final newPath = '$storiesDir/$newFilename';
         final uniquePath = await _getUniqueFilePath(newPath);
 
-        await File(story.filePath!).rename(uniquePath);
+        if (storage != null) {
+          // ProfileStorage has no rename — read, write new, delete old
+          final bytes = await storage!.readBytes(_toRelative(story.filePath!));
+          if (bytes != null) {
+            await storage!.writeBytes(_toRelative(uniquePath), bytes);
+            await storage!.delete(_toRelative(story.filePath!));
+          }
+        } else {
+          await File(story.filePath!).rename(uniquePath);
+        }
         _log.log('StoriesStorageService: Renamed ${story.filePath} to $uniquePath');
         return updated.copyWith(filePath: uniquePath);
       }
@@ -174,7 +228,15 @@ class StoriesStorageService {
       final newPath = '$storiesDir/$newFilename';
       final uniquePath = await _getUniqueFilePath(newPath);
 
-      await File(story.filePath!).rename(uniquePath);
+      if (storage != null) {
+        final bytes = await storage!.readBytes(_toRelative(story.filePath!));
+        if (bytes != null) {
+          await storage!.writeBytes(_toRelative(uniquePath), bytes);
+          await storage!.delete(_toRelative(story.filePath!));
+        }
+      } else {
+        await File(story.filePath!).rename(uniquePath);
+      }
       _log.log('StoriesStorageService: Renamed ${story.filePath} to $uniquePath');
       return updated.copyWith(filePath: uniquePath);
     }
@@ -186,10 +248,18 @@ class StoriesStorageService {
   Future<void> deleteStory(Story story) async {
     if (story.filePath == null) return;
 
-    final file = File(story.filePath!);
-    if (await file.exists()) {
-      await file.delete();
-      _log.log('StoriesStorageService: Deleted ${story.filePath}');
+    if (storage != null) {
+      final rel = _toRelative(story.filePath!);
+      if (await storage!.exists(rel)) {
+        await storage!.delete(rel);
+        _log.log('StoriesStorageService: Deleted ${story.filePath}');
+      }
+    } else {
+      final file = File(story.filePath!);
+      if (await file.exists()) {
+        await file.delete();
+        _log.log('StoriesStorageService: Deleted ${story.filePath}');
+      }
     }
   }
 
@@ -297,8 +367,17 @@ class StoriesStorageService {
     }
 
     // Read original file
-    final originalFile = File(original.filePath!);
-    final bytes = await originalFile.readAsBytes();
+    Uint8List bytes;
+    if (storage != null) {
+      final data = await storage!.readBytes(_toRelative(original.filePath!));
+      if (data == null) {
+        throw Exception('Original story file not found');
+      }
+      bytes = data;
+    } else {
+      final originalFile = File(original.filePath!);
+      bytes = await originalFile.readAsBytes();
+    }
 
     // Create new story metadata
     final newStory = Story.create(
@@ -308,7 +387,11 @@ class StoriesStorageService {
 
     // Write to new file
     final newPath = await _getUniqueFilePath('$storiesDir/${newStory.filename}');
-    await File(newPath).writeAsBytes(bytes);
+    if (storage != null) {
+      await storage!.writeBytes(_toRelative(newPath), bytes);
+    } else {
+      await File(newPath).writeAsBytes(bytes);
+    }
 
     // Update the metadata in the new file
     await _ndfService.saveStoryMetadata(newPath, newStory);

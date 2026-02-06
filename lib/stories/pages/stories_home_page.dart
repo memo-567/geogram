@@ -5,6 +5,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../../services/app_service.dart';
 import '../../services/i18n_service.dart';
 import '../../util/app_constants.dart';
 import '../models/story.dart';
@@ -69,7 +70,10 @@ class _StoriesHomePageState extends State<StoriesHomePage> {
   @override
   void initState() {
     super.initState();
-    _storage = StoriesStorageService(basePath: widget.appPath);
+    _storage = StoriesStorageService(
+      basePath: widget.appPath,
+      storage: AppService().profileStorage,
+    );
     _searchController.addListener(_filterStories);
     _loadStories();
   }
