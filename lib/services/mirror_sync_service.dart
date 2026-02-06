@@ -24,6 +24,45 @@ import 'log_service.dart';
 import 'mirror_config_service.dart';
 import 'profile_service.dart';
 import 'storage_config.dart';
+import '../models/mirror_config.dart';
+
+/// Check if a relative path matches a single ignore pattern.
+/// Supports `*` (any non-slash chars), `**` (recursive/any path), `?` (single char).
+bool matchesIgnorePattern(String path, String pattern) {
+  // Convert glob pattern to regex
+  final buf = StringBuffer('^');
+  for (var i = 0; i < pattern.length; i++) {
+    final ch = pattern[i];
+    if (ch == '*') {
+      if (i + 1 < pattern.length && pattern[i + 1] == '*') {
+        // ** matches anything including path separators
+        buf.write('.*');
+        // Skip optional trailing slash after **
+        i++;
+        if (i + 1 < pattern.length && pattern[i + 1] == '/') i++;
+      } else {
+        // * matches anything except /
+        buf.write('[^/]*');
+      }
+    } else if (ch == '?') {
+      buf.write('[^/]');
+    } else if (ch == '.') {
+      buf.write(r'\.');
+    } else {
+      buf.write(ch);
+    }
+  }
+  buf.write(r'$');
+  return RegExp(buf.toString()).hasMatch(path);
+}
+
+/// Check if a relative path should be ignored given a list of patterns.
+bool isIgnored(String relativePath, List<String> patterns) {
+  for (final pattern in patterns) {
+    if (matchesIgnorePattern(relativePath, pattern)) return true;
+  }
+  return false;
+}
 
 /// File entry in a mirror manifest
 class MirrorFileEntry {
@@ -119,6 +158,9 @@ enum FileChangeType {
 
   /// File should be deleted (exists locally but not in manifest)
   delete,
+
+  /// File needs to be uploaded to remote (local newer or local-only)
+  upload,
 }
 
 /// A detected change between local and remote folders
@@ -126,12 +168,14 @@ class FileChange {
   final FileChangeType type;
   final String path;
   final MirrorFileEntry? remoteEntry;
+  final MirrorFileEntry? localEntry;
   final int? localSize;
 
   const FileChange({
     required this.type,
     required this.path,
     this.remoteEntry,
+    this.localEntry,
     this.localSize,
   });
 
@@ -152,6 +196,12 @@ class FileChange {
         type: FileChangeType.delete,
         path: path,
         localSize: localSize,
+      );
+
+  factory FileChange.upload(MirrorFileEntry localEntry) => FileChange(
+        type: FileChangeType.upload,
+        path: localEntry.path,
+        localEntry: localEntry,
       );
 }
 
@@ -196,7 +246,9 @@ class SyncResult {
   final int filesAdded;
   final int filesModified;
   final int filesDeleted;
+  final int filesUploaded;
   final int bytesTransferred;
+  final int bytesUploaded;
   final Duration duration;
 
   const SyncResult({
@@ -205,7 +257,9 @@ class SyncResult {
     this.filesAdded = 0,
     this.filesModified = 0,
     this.filesDeleted = 0,
+    this.filesUploaded = 0,
     this.bytesTransferred = 0,
+    this.bytesUploaded = 0,
     this.duration = Duration.zero,
   });
 
@@ -214,7 +268,7 @@ class SyncResult {
         error: error,
       );
 
-  int get totalChanges => filesAdded + filesModified + filesDeleted;
+  int get totalChanges => filesAdded + filesModified + filesDeleted + filesUploaded;
 }
 
 /// Sync status for tracking progress
@@ -744,9 +798,11 @@ class MirrorSyncService {
     MirrorManifest remote,
     String localPath, {
     bool deleteLocalOnly = false,
+    SyncStyle syncStyle = SyncStyle.receiveOnly,
+    List<String> ignorePatterns = const [],
   }) async {
     final changes = <FileChange>[];
-    final localFiles = <String, int>{};
+    final localFiles = <String, ({int size, int mtime, String sha1})>{};
 
     // Scan local folder
     final localDir = Directory(localPath);
@@ -754,30 +810,49 @@ class MirrorSyncService {
       await for (final entity in localDir.list(recursive: true)) {
         if (entity is File) {
           final relativePath = path.relative(entity.path, from: localPath);
-          if (!relativePath.startsWith('.')) {
-            final stat = await entity.stat();
-            localFiles[relativePath] = stat.size;
-          }
+          if (relativePath.startsWith('.')) continue;
+          if (isIgnored(relativePath, ignorePatterns)) continue;
+          final stat = await entity.stat();
+          final bytes = await entity.readAsBytes();
+          final hash = sha1.convert(bytes).toString();
+          localFiles[relativePath] = (
+            size: stat.size,
+            mtime: stat.modified.millisecondsSinceEpoch ~/ 1000,
+            sha1: hash,
+          );
         }
       }
     }
 
     // Check remote files against local
     for (final remoteFile in remote.files) {
-      final localSize = localFiles.remove(remoteFile.path);
+      if (isIgnored(remoteFile.path, ignorePatterns)) continue;
 
-      if (localSize == null) {
-        // File doesn't exist locally - add
+      final local = localFiles.remove(remoteFile.path);
+
+      if (local == null) {
+        // File doesn't exist locally - add (download from remote)
         changes.add(FileChange.add(remoteFile));
-      } else {
-        // File exists - check SHA1
-        final localFile = File('$localPath/${remoteFile.path}');
-        final localBytes = await localFile.readAsBytes();
-        final localSha1 = sha1.convert(localBytes).toString();
-
-        if (localSha1 != remoteFile.sha1) {
-          // SHA1 differs - modify
-          changes.add(FileChange.modify(remoteFile, localSize));
+      } else if (local.sha1 != remoteFile.sha1) {
+        // SHA1 differs
+        if (syncStyle == SyncStyle.sendReceive) {
+          // Bidirectional: most recent mtime wins
+          if (remoteFile.mtime > local.mtime) {
+            // Remote is newer — download
+            changes.add(FileChange.modify(remoteFile, local.size));
+          } else if (local.mtime > remoteFile.mtime) {
+            // Local is newer — upload
+            changes.add(FileChange.upload(MirrorFileEntry(
+              path: remoteFile.path,
+              sha1: local.sha1,
+              mtime: local.mtime,
+              size: local.size,
+            )));
+          }
+          // Equal mtime + different SHA1 = true conflict, skip
+        } else {
+          // receiveOnly / sendOnly: source (remote) always wins
+          changes.add(FileChange.modify(remoteFile, local.size));
         }
       }
     }
@@ -785,7 +860,17 @@ class MirrorSyncService {
     // Remaining local files don't exist in remote
     if (deleteLocalOnly) {
       for (final entry in localFiles.entries) {
-        changes.add(FileChange.delete(entry.key, entry.value));
+        changes.add(FileChange.delete(entry.key, entry.value.size));
+      }
+    } else if (syncStyle == SyncStyle.sendReceive) {
+      // Local-only files should be uploaded to remote
+      for (final entry in localFiles.entries) {
+        changes.add(FileChange.upload(MirrorFileEntry(
+          path: entry.key,
+          sha1: entry.value.sha1,
+          mtime: entry.value.mtime,
+          size: entry.value.size,
+        )));
       }
     }
 
@@ -837,18 +922,64 @@ class MirrorSyncService {
     }
   }
 
+  /// Upload a single file to peer
+  Future<bool> uploadFile(
+    String peerUrl,
+    String folder,
+    String filePath,
+    String localPath,
+    String token, {
+    String? sha1Hash,
+  }) async {
+    try {
+      final localFile = File('$localPath/$filePath');
+      if (!await localFile.exists()) {
+        LogService().log('MirrorSync: Upload failed, file not found: $filePath');
+        return false;
+      }
+
+      final bytes = await localFile.readAsBytes();
+      final hash = sha1Hash ?? sha1.convert(bytes).toString();
+
+      final url = Uri.parse(
+          '$peerUrl/api/mirror/upload?path=${Uri.encodeComponent(filePath)}&token=${Uri.encodeComponent(token)}&sha1=${Uri.encodeComponent(hash)}');
+
+      final response = await http.post(
+        url,
+        headers: {'Content-Type': 'application/octet-stream'},
+        body: bytes,
+      );
+
+      if (response.statusCode != 200) {
+        LogService().log(
+            'MirrorSync: File upload failed: $filePath (${response.statusCode})');
+        return false;
+      }
+
+      final body = jsonDecode(response.body);
+      return body['success'] == true;
+    } catch (e) {
+      LogService().log('MirrorSync: File upload failed: $filePath: $e');
+      return false;
+    }
+  }
+
   /// Sync a folder from a peer (complete workflow)
   Future<SyncResult> syncFolder(
     String peerUrl,
     String folder, {
     bool deleteLocalOnly = false,
+    SyncStyle syncStyle = SyncStyle.receiveOnly,
+    List<String> ignorePatterns = const [],
     void Function(SyncStatus)? onProgress,
   }) async {
     final stopwatch = Stopwatch()..start();
     var filesAdded = 0;
     var filesModified = 0;
     var filesDeleted = 0;
+    var filesUploaded = 0;
     var bytesTransferred = 0;
+    var bytesUploaded = 0;
 
     try {
       // 1. Request sync permission
@@ -873,8 +1004,13 @@ class MirrorSyncService {
       await Directory(localPath).create(recursive: true);
 
       // 4. Diff manifest
-      final changes =
-          await diffManifest(manifest, localPath, deleteLocalOnly: deleteLocalOnly);
+      final changes = await diffManifest(
+        manifest,
+        localPath,
+        deleteLocalOnly: deleteLocalOnly,
+        syncStyle: syncStyle,
+        ignorePatterns: ignorePatterns,
+      );
 
       if (changes.isEmpty) {
         stopwatch.stop();
@@ -934,6 +1070,22 @@ class MirrorSyncService {
               filesDeleted++;
             }
             break;
+
+          case FileChangeType.upload:
+            final success = await uploadFile(
+              peerUrl,
+              folder,
+              change.path,
+              localPath,
+              token,
+              sha1Hash: change.localEntry?.sha1,
+            );
+
+            if (success) {
+              filesUploaded++;
+              bytesUploaded += change.localEntry?.size ?? 0;
+            }
+            break;
         }
 
         processed++;
@@ -947,7 +1099,9 @@ class MirrorSyncService {
         filesAdded: filesAdded,
         filesModified: filesModified,
         filesDeleted: filesDeleted,
+        filesUploaded: filesUploaded,
         bytesTransferred: bytesTransferred,
+        bytesUploaded: bytesUploaded,
         duration: stopwatch.elapsed,
       );
     } catch (e) {

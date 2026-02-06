@@ -1083,9 +1083,15 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
     if (_initialSyncOption == InitialSyncOption.downloadAll) {
       for (final appId in selectedAppIds) {
         final style = _appStyles[appId] ?? SyncStyle.sendReceive;
-        if (style == SyncStyle.sendReceive || style == SyncStyle.receiveOnly) {
+        if (style != SyncStyle.paused) {
           try {
-            await syncService.syncFolder(peerUrl, appId);
+            final appConfig = apps[appId];
+            await syncService.syncFolder(
+              peerUrl,
+              appId,
+              syncStyle: style,
+              ignorePatterns: appConfig?.ignorePatterns ?? const [],
+            );
           } catch (e) {
             LogService().log('MirrorWizard: Initial sync failed for $appId: $e');
           }

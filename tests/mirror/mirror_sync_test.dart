@@ -94,6 +94,8 @@ class MockSourceServer {
         await _handleManifest(request);
       } else if (path == '/api/mirror/file' && method == 'GET') {
         await _handleFile(request);
+      } else if (path == '/api/mirror/upload' && method == 'POST') {
+        await _handleUpload(request);
       } else if (path == '/api/mirror/pair' && method == 'POST') {
         await _handlePair(request);
       } else if (path == '/api/status' && method == 'GET') {
@@ -311,6 +313,58 @@ class MockSourceServer {
     await request.response.close();
   }
 
+  Future<void> _handleUpload(HttpRequest request) async {
+    final filePath = request.uri.queryParameters['path'];
+    final token = request.uri.queryParameters['token'];
+    final expectedSha1 = request.uri.queryParameters['sha1'];
+
+    if (token == null) {
+      _jsonResponse(request, 401, {'success': false, 'error': 'Missing token'});
+      return;
+    }
+    final validToken = _tokens[token];
+    if (validToken == null || validToken.expiresAt.isBefore(DateTime.now())) {
+      _jsonResponse(request, 401, {'success': false, 'error': 'Invalid token'});
+      return;
+    }
+    if (filePath == null || filePath.isEmpty) {
+      _jsonResponse(request, 400, {'success': false, 'error': 'Missing path'});
+      return;
+    }
+
+    // Read body bytes
+    final chunks = <int>[];
+    await for (final chunk in request) {
+      chunks.addAll(chunk);
+    }
+    final bodyBytes = Uint8List.fromList(chunks);
+
+    // Verify SHA1 if provided
+    if (expectedSha1 != null && expectedSha1.isNotEmpty) {
+      final actualSha1 = sha1.convert(bodyBytes).toString();
+      if (actualSha1 != expectedSha1) {
+        _jsonResponse(request, 400, {
+          'success': false,
+          'error': 'SHA1 mismatch',
+          'code': 'SHA1_MISMATCH',
+        });
+        return;
+      }
+    }
+
+    // Write file to source dir
+    final fullPath = '$sourceDir/${validToken.folder}/$filePath';
+    final file = File(fullPath);
+    await file.parent.create(recursive: true);
+    await file.writeAsBytes(bodyBytes);
+
+    _jsonResponse(request, 200, {
+      'success': true,
+      'path': filePath,
+      'size': bodyBytes.length,
+    });
+  }
+
   Future<void> _handlePair(HttpRequest request) async {
     final body = jsonDecode(await utf8.decoder.bind(request).join()) as Map<String, dynamic>;
     final peerNpub = body['npub'] as String?;
@@ -371,11 +425,17 @@ class SyncClient {
   String get _pubkeyHex => NostrCrypto.decodeNpub(npub);
   String get _privkeyHex => NostrCrypto.decodeNsec(nsec);
 
-  /// Full sync: challenge-response auth -> manifest -> diff -> download
-  Future<SyncResult> syncFolder(String peerUrl, String folder) async {
+  /// Full sync: challenge-response auth -> manifest -> diff -> download/upload
+  Future<SyncResult> syncFolder(
+    String peerUrl,
+    String folder, {
+    String syncStyle = 'receiveOnly',
+    List<String> ignorePatterns = const [],
+  }) async {
     final stopwatch = Stopwatch()..start();
     var filesAdded = 0;
     var filesModified = 0;
+    var filesUploaded = 0;
     var bytesTransferred = 0;
 
     // 1. Get challenge
@@ -436,17 +496,46 @@ class SyncClient {
         .map((f) => f as Map<String, dynamic>)
         .toList();
 
+    // Build remote files map for quick lookup
+    final remoteMap = <String, Map<String, dynamic>>{};
+    for (final rf in remoteFiles) {
+      remoteMap[rf['path'] as String] = rf;
+    }
+
     // 5. Diff against local
     final localDir = '$destDir/$folder';
     await Directory(localDir).create(recursive: true);
 
+    // Track local files for detecting local-only files
+    final localFileSet = <String>{};
+
+    // Scan local files
+    final localDirObj = Directory(localDir);
+    if (localDirObj.existsSync()) {
+      await for (final entity in localDirObj.list(recursive: true)) {
+        if (entity is File) {
+          final relative = entity.path.substring(localDir.length + 1);
+          if (relative.startsWith('.')) continue;
+          if (_isIgnored(relative, ignorePatterns)) continue;
+          localFileSet.add(relative);
+        }
+      }
+    }
+
+    // Process remote files
     for (final remote in remoteFiles) {
       final remotePath = remote['path'] as String;
       final remoteSha1 = remote['sha1'] as String;
       final remoteSize = remote['size'] as int;
+      final remoteMtime = remote['mtime'] as int;
+
+      if (_isIgnored(remotePath, ignorePatterns)) continue;
+      localFileSet.remove(remotePath);
+
       final localFile = File('$localDir/$remotePath');
 
       bool needsDownload = false;
+      bool needsUpload = false;
       bool isNew = false;
 
       if (!localFile.existsSync()) {
@@ -456,17 +545,27 @@ class SyncClient {
         final localBytes = localFile.readAsBytesSync();
         final localSha1 = sha1.convert(localBytes).toString();
         if (localSha1 != remoteSha1) {
-          needsDownload = true;
+          if (syncStyle == 'sendReceive') {
+            // Bidirectional: compare mtime
+            final localStat = localFile.statSync();
+            final localMtime = localStat.modified.millisecondsSinceEpoch ~/ 1000;
+            if (remoteMtime > localMtime) {
+              needsDownload = true;
+            } else if (localMtime > remoteMtime) {
+              needsUpload = true;
+            }
+            // Equal mtime + different SHA1 = conflict, skip
+          } else {
+            needsDownload = true;
+          }
         }
       }
 
       if (needsDownload) {
-        // Download file
         final fileResp = await http.get(
           Uri.parse('$peerUrl/api/mirror/file?path=${Uri.encodeComponent(remotePath)}&token=${Uri.encodeComponent(token)}'),
         );
         if (fileResp.statusCode == 200) {
-          // Verify SHA1
           final downloadedSha1 = sha1.convert(fileResp.bodyBytes).toString();
           if (downloadedSha1 != remoteSha1) {
             print('    WARNING: SHA1 mismatch for $remotePath');
@@ -483,6 +582,41 @@ class SyncClient {
             filesModified++;
           }
         }
+      } else if (needsUpload) {
+        final localBytes = localFile.readAsBytesSync();
+        final localSha1Hash = sha1.convert(localBytes).toString();
+        final uploadResp = await http.post(
+          Uri.parse('$peerUrl/api/mirror/upload?path=${Uri.encodeComponent(remotePath)}&token=${Uri.encodeComponent(token)}&sha1=${Uri.encodeComponent(localSha1Hash)}'),
+          headers: {'Content-Type': 'application/octet-stream'},
+          body: localBytes,
+        );
+        if (uploadResp.statusCode == 200) {
+          final uploadData = jsonDecode(uploadResp.body) as Map<String, dynamic>;
+          if (uploadData['success'] == true) {
+            filesUploaded++;
+          }
+        }
+      }
+    }
+
+    // Local-only files: upload in sendReceive mode
+    if (syncStyle == 'sendReceive') {
+      for (final localPath in localFileSet) {
+        final localFile = File('$localDir/$localPath');
+        if (!localFile.existsSync()) continue;
+        final localBytes = localFile.readAsBytesSync();
+        final localSha1Hash = sha1.convert(localBytes).toString();
+        final uploadResp = await http.post(
+          Uri.parse('$peerUrl/api/mirror/upload?path=${Uri.encodeComponent(localPath)}&token=${Uri.encodeComponent(token)}&sha1=${Uri.encodeComponent(localSha1Hash)}'),
+          headers: {'Content-Type': 'application/octet-stream'},
+          body: localBytes,
+        );
+        if (uploadResp.statusCode == 200) {
+          final uploadData = jsonDecode(uploadResp.body) as Map<String, dynamic>;
+          if (uploadData['success'] == true) {
+            filesUploaded++;
+          }
+        }
       }
     }
 
@@ -491,9 +625,41 @@ class SyncClient {
       true,
       filesAdded: filesAdded,
       filesModified: filesModified,
+      filesUploaded: filesUploaded,
       bytesTransferred: bytesTransferred,
       duration: stopwatch.elapsed,
     );
+  }
+
+  bool _isIgnored(String path, List<String> patterns) {
+    for (final pattern in patterns) {
+      if (_matchesPattern(path, pattern)) return true;
+    }
+    return false;
+  }
+
+  bool _matchesPattern(String path, String pattern) {
+    final buf = StringBuffer('^');
+    for (var i = 0; i < pattern.length; i++) {
+      final ch = pattern[i];
+      if (ch == '*') {
+        if (i + 1 < pattern.length && pattern[i + 1] == '*') {
+          buf.write('.*');
+          i++;
+          if (i + 1 < pattern.length && pattern[i + 1] == '/') i++;
+        } else {
+          buf.write('[^/]*');
+        }
+      } else if (ch == '?') {
+        buf.write('[^/]');
+      } else if (ch == '.') {
+        buf.write(r'\.');
+      } else {
+        buf.write(ch);
+      }
+    }
+    buf.write(r'$');
+    return RegExp(buf.toString()).hasMatch(path);
   }
 }
 
@@ -502,6 +668,7 @@ class SyncResult {
   final String? error;
   final int filesAdded;
   final int filesModified;
+  final int filesUploaded;
   final int bytesTransferred;
   final Duration duration;
 
@@ -510,11 +677,12 @@ class SyncResult {
     this.error,
     this.filesAdded = 0,
     this.filesModified = 0,
+    this.filesUploaded = 0,
     this.bytesTransferred = 0,
     this.duration = Duration.zero,
   });
 
-  int get totalChanges => filesAdded + filesModified;
+  int get totalChanges => filesAdded + filesModified + filesUploaded;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────
@@ -805,6 +973,105 @@ void main() async {
     );
     check('Fake signature rejected (401)', fakeResp.statusCode == 401,
         'got ${fakeResp.statusCode}');
+
+    // ── Test 11: Bidirectional — local newer wins ──────────────
+
+    section('TEST 11: Bidirectional — Local Newer Wins (sendReceive)');
+
+    // Modify dest file and set its mtime to the future
+    final destPost1 = File('$dstBlog/post1.json');
+    destPost1.writeAsStringSync('{"title":"DEST NEWER","body":"Local edit wins"}');
+    // Touch the file to ensure it has a newer mtime than source
+    final futureTime = DateTime.now().add(const Duration(seconds: 10));
+    destPost1.setLastModifiedSync(futureTime);
+
+    final result11 = await client.syncFolder(server.url, 'blog', syncStyle: 'sendReceive');
+
+    check('Sync succeeded', result11.success, result11.error);
+    check('1 file uploaded (local newer)', result11.filesUploaded >= 1,
+        'uploaded=${result11.filesUploaded}');
+    // Source should now have dest's content
+    final srcPost1Content = File('${srcDir.path}/blog/post1.json').readAsStringSync();
+    check('Source received dest content', srcPost1Content.contains('DEST NEWER'),
+        'source content: $srcPost1Content');
+
+    // ── Test 12: Bidirectional — remote newer wins ─────────────
+
+    section('TEST 12: Bidirectional — Remote Newer Wins (sendReceive)');
+
+    // Modify source file and set its mtime to the future
+    final srcPost2 = File('${srcDir.path}/blog/post2.json');
+    srcPost2.writeAsStringSync('{"title":"SOURCE NEWER","body":"Remote edit wins"}');
+    final futureTime2 = DateTime.now().add(const Duration(seconds: 20));
+    srcPost2.setLastModifiedSync(futureTime2);
+    // Ensure dest post2 has older mtime
+    final destPost2 = File('$dstBlog/post2.json');
+    final pastTime = DateTime.now().subtract(const Duration(seconds: 60));
+    destPost2.setLastModifiedSync(pastTime);
+
+    final result12 = await client.syncFolder(server.url, 'blog', syncStyle: 'sendReceive');
+
+    check('Sync succeeded', result12.success, result12.error);
+    check('1 file modified (remote newer)', result12.filesModified >= 1,
+        'modified=${result12.filesModified}');
+    final destPost2Content = File('$dstBlog/post2.json').readAsStringSync();
+    check('Dest received source content', destPost2Content.contains('SOURCE NEWER'),
+        'dest content: $destPost2Content');
+
+    // ── Test 13: Bidirectional — local-only file uploaded ──────
+
+    section('TEST 13: Bidirectional — Local-Only File Uploaded');
+
+    // Create a file only on dest
+    File('$dstBlog/local_only.json')
+        .writeAsStringSync('{"title":"Local Only","body":"Should appear on source"}');
+
+    final result13 = await client.syncFolder(server.url, 'blog', syncStyle: 'sendReceive');
+
+    check('Sync succeeded', result13.success, result13.error);
+    check('1 file uploaded (local-only)', result13.filesUploaded >= 1,
+        'uploaded=${result13.filesUploaded}');
+    check('Source has local_only.json',
+        File('${srcDir.path}/blog/local_only.json').existsSync());
+    if (File('${srcDir.path}/blog/local_only.json').existsSync()) {
+      final srcContent = File('${srcDir.path}/blog/local_only.json').readAsStringSync();
+      check('Source has correct content', srcContent.contains('Local Only'),
+          'content: $srcContent');
+    }
+
+    // ── Test 14: Ignore patterns ──────────────────────────────
+
+    section('TEST 14: Ignore Patterns');
+
+    // Create files that should be ignored
+    File('${srcDir.path}/blog/temp.tmp')
+        .writeAsStringSync('temp file');
+    Directory('${srcDir.path}/blog/cache').createSync();
+    File('${srcDir.path}/blog/cache/data.bin')
+        .writeAsStringSync('cached data');
+    File('${srcDir.path}/blog/important.json')
+        .writeAsStringSync('{"title":"Important","body":"Should sync"}');
+
+    // Also create matching files on dest to test ignore on local scan
+    File('$dstBlog/dest_temp.tmp')
+        .writeAsStringSync('dest temp file');
+
+    final result14 = await client.syncFolder(
+      server.url,
+      'blog',
+      syncStyle: 'sendReceive',
+      ignorePatterns: ['*.tmp', 'cache/*'],
+    );
+
+    check('Sync succeeded', result14.success, result14.error);
+    // important.json should be synced
+    check('important.json synced', File('$dstBlog/important.json').existsSync());
+    // temp.tmp should NOT be synced to dest
+    check('temp.tmp not synced', !File('$dstBlog/temp.tmp').existsSync());
+    // cache/data.bin should NOT be synced to dest
+    check('cache/data.bin not synced', !File('$dstBlog/cache/data.bin').existsSync());
+    // dest_temp.tmp should NOT be uploaded to source
+    check('dest_temp.tmp not uploaded', !File('${srcDir.path}/blog/dest_temp.tmp').existsSync());
 
   } finally {
     await server.stop();

@@ -117,6 +117,9 @@ class AppSyncConfig {
   /// Last sync error message
   String? lastError;
 
+  /// Glob patterns for files to ignore during sync
+  List<String> ignorePatterns;
+
   AppSyncConfig({
     required this.appId,
     this.style = SyncStyle.sendReceive,
@@ -124,6 +127,7 @@ class AppSyncConfig {
     this.state = SyncState.idle,
     this.stats = const SyncStats(),
     this.lastError,
+    this.ignorePatterns = const [],
   });
 
   factory AppSyncConfig.fromJson(Map<String, dynamic> json) {
@@ -142,6 +146,7 @@ class AppSyncConfig {
           ? SyncStats.fromJson(json['stats'] as Map<String, dynamic>)
           : const SyncStats(),
       lastError: json['last_error'] as String?,
+      ignorePatterns: (json['ignore_patterns'] as List<dynamic>?)?.cast<String>() ?? [],
     );
   }
 
@@ -152,6 +157,7 @@ class AppSyncConfig {
         'state': state.name,
         'stats': stats.toJson(),
         if (lastError != null) 'last_error': lastError,
+        if (ignorePatterns.isNotEmpty) 'ignore_patterns': ignorePatterns,
       };
 
   AppSyncConfig copyWith({
@@ -160,6 +166,7 @@ class AppSyncConfig {
     SyncState? state,
     SyncStats? stats,
     String? lastError,
+    List<String>? ignorePatterns,
   }) {
     return AppSyncConfig(
       appId: appId,
@@ -168,6 +175,7 @@ class AppSyncConfig {
       state: state ?? this.state,
       stats: stats ?? this.stats,
       lastError: lastError ?? this.lastError,
+      ignorePatterns: ignorePatterns ?? this.ignorePatterns,
     );
   }
 }

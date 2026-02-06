@@ -579,6 +579,7 @@ class LogApiService {
           '/api/mirror/request': 'POST request simple mirror sync (with signed challenge)',
           '/api/mirror/manifest': 'GET folder manifest for sync',
           '/api/mirror/file': 'GET file content for sync',
+          '/api/mirror/upload': 'POST upload a file to peer',
           '/api/mirror/pair': 'POST reciprocal pairing (registers both devices as peers)',
         },
       }),
@@ -13088,6 +13089,11 @@ ul, ol { margin-left: 30px; padding: 0; }
       return await _handleMirrorFile(request, headers);
     }
 
+    // POST /api/mirror/upload - Upload a file from peer
+    if (urlPath == 'api/mirror/upload' && request.method == 'POST') {
+      return await _handleMirrorUpload(request, headers);
+    }
+
     // POST /api/mirror/pair - Reciprocal pairing
     if (urlPath == 'api/mirror/pair' && request.method == 'POST') {
       return await _handleMirrorPair(request, headers);
@@ -13489,6 +13495,119 @@ ul, ol { margin-left: 30px; padding: 0; }
       );
     } catch (e, stack) {
       LogService().log('LogApiService: Mirror file error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle POST /api/mirror/upload - Upload a file from peer
+  Future<shelf.Response> _handleMirrorUpload(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final filePath = request.url.queryParameters['path'];
+      final token = request.url.queryParameters['token'];
+      final expectedSha1 = request.url.queryParameters['sha1'];
+
+      if (token == null || token.isEmpty) {
+        return shelf.Response(
+          401,
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing token',
+            'code': 'INVALID_TOKEN',
+          }),
+          headers: headers,
+        );
+      }
+
+      if (filePath == null || filePath.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing path parameter',
+          }),
+          headers: headers,
+        );
+      }
+
+      // Validate token
+      final mirrorService = MirrorSyncService.instance;
+      final folder = mirrorService.validateToken(token);
+
+      if (folder == null) {
+        return shelf.Response(
+          401,
+          body: jsonEncode({
+            'success': false,
+            'error': 'Invalid or expired token',
+            'code': 'INVALID_TOKEN',
+          }),
+          headers: headers,
+        );
+      }
+
+      // Construct full path
+      final basePath = StorageConfig().baseDir;
+      final folderPath = '$basePath/$folder';
+      final fullPath = '$folderPath/$filePath';
+
+      // Security: Ensure path doesn't escape folder
+      final normalizedPath = path.normalize(fullPath);
+      if (!normalizedPath.startsWith(path.normalize(folderPath))) {
+        return shelf.Response(
+          403,
+          body: jsonEncode({
+            'success': false,
+            'error': 'Invalid path',
+            'code': 'PATH_TRAVERSAL',
+          }),
+          headers: headers,
+        );
+      }
+
+      // Read raw body bytes
+      final bytes = await request.read().expand((chunk) => chunk).toList();
+      final bodyBytes = Uint8List.fromList(bytes);
+
+      // Verify SHA1 if provided
+      if (expectedSha1 != null && expectedSha1.isNotEmpty) {
+        final actualSha1 = sha1.convert(bodyBytes).toString();
+        if (actualSha1 != expectedSha1) {
+          return shelf.Response(
+            400,
+            body: jsonEncode({
+              'success': false,
+              'error': 'SHA1 mismatch: expected $expectedSha1, got $actualSha1',
+              'code': 'SHA1_MISMATCH',
+            }),
+            headers: headers,
+          );
+        }
+      }
+
+      // Write file
+      final file = io.File(fullPath);
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(bodyBytes);
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'path': filePath,
+          'size': bodyBytes.length,
+        }),
+        headers: headers,
+      );
+    } catch (e, stack) {
+      LogService().log('LogApiService: Mirror upload error: $e');
       LogService().log('Stack: $stack');
       return shelf.Response.internalServerError(
         body: jsonEncode({

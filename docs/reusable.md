@@ -3758,7 +3758,7 @@ final upload = await TransferService().requestUpload(
 **File:** `lib/services/mirror_sync_service.dart`
 **Docs:** `docs/API_synch.md`
 
-Simple one-way folder synchronization between Geogram instances using NOSTR-signed authentication.
+Bidirectional folder synchronization between Geogram instances using NOSTR-signed authentication.
 
 **Usage (as source - serving sync requests):**
 ```dart
@@ -3780,23 +3780,39 @@ final manifest = await mirrorService.generateManifest('/path/to/folder');
 
 **Usage (as destination - performing sync):**
 ```dart
-// Sync folder from peer
+// Bidirectional sync (sendReceive): most recent mtime wins
 final result = await mirrorService.syncFolder(
   'http://192.168.1.100:3456',
   'collections/blog',
+  syncStyle: SyncStyle.sendReceive,
+  ignorePatterns: ['*.tmp', 'cache/*'],
 );
 
 if (result.success) {
   print('Added: ${result.filesAdded}');
   print('Modified: ${result.filesModified}');
-  print('Transferred: ${result.bytesTransferred} bytes');
+  print('Uploaded: ${result.filesUploaded}');
+  print('Downloaded: ${result.bytesTransferred} bytes');
+  print('Uploaded: ${result.bytesUploaded} bytes');
 }
+```
+
+**Glob matching (reusable top-level functions):**
+```dart
+// Check if a path matches a single glob pattern (* ? **)
+bool matchesIgnorePattern(String path, String pattern);
+
+// Check if a path matches any pattern in a list
+bool isIgnored(String relativePath, List<String> patterns);
 ```
 
 **Key Features:**
 - NOSTR event signature verification for authentication
 - SHA1 file hashing for change detection
-- One-way sync (source overwrites destination)
+- Bidirectional sync (`sendReceive`): mtime-wins conflict resolution
+- One-way sync (`receiveOnly`): source always overwrites destination
+- Per-app ignore patterns with glob matching (`*`, `**`, `?`)
+- File upload to peer via `POST /api/mirror/upload`
 - Token-based session management (1 hour expiry)
 - Range header support for resumable downloads
 - Path traversal protection

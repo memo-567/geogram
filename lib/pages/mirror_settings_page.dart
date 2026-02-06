@@ -608,6 +608,7 @@ class _MirrorSettingsPageState extends State<MirrorSettingsPage> {
     final syncService = MirrorSyncService.instance;
     var totalAdded = 0;
     var totalModified = 0;
+    var totalUploaded = 0;
     var errors = 0;
 
     for (final peer in peers) {
@@ -619,14 +620,18 @@ class _MirrorSettingsPageState extends State<MirrorSettingsPage> {
         final appConfig = peer.apps[appId];
         if (appConfig == null) continue;
         final style = appConfig.style;
-        if (style != SyncStyle.sendReceive && style != SyncStyle.receiveOnly) {
-          continue;
-        }
+        if (style == SyncStyle.paused) continue;
         try {
-          final result = await syncService.syncFolder(peerUrl, appId);
+          final result = await syncService.syncFolder(
+            peerUrl,
+            appId,
+            syncStyle: style,
+            ignorePatterns: appConfig.ignorePatterns,
+          );
           if (result.success) {
             totalAdded += result.filesAdded;
             totalModified += result.filesModified;
+            totalUploaded += result.filesUploaded;
           } else {
             errors++;
           }
@@ -639,9 +644,14 @@ class _MirrorSettingsPageState extends State<MirrorSettingsPage> {
     }
 
     if (mounted) {
+      final parts = <String>[];
+      if (totalAdded > 0) parts.add('+$totalAdded new');
+      if (totalModified > 0) parts.add('~$totalModified updated');
+      if (totalUploaded > 0) parts.add('↑$totalUploaded uploaded');
+      final summary = parts.isEmpty ? 'No changes.' : parts.join(', ');
       final msg = errors > 0
-          ? 'Sync done with $errors error(s). +$totalAdded new, ~$totalModified updated.'
-          : 'Sync complete. +$totalAdded new, ~$totalModified updated.';
+          ? 'Sync done with $errors error(s). $summary'
+          : 'Sync complete. $summary';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(msg)),
       );
@@ -1128,20 +1138,25 @@ class _PeerSettingsPageState extends State<PeerSettingsPage> {
     final enabledApps = _configService.getEnabledAppsForPeer(_peer.peerId);
     var totalAdded = 0;
     var totalModified = 0;
+    var totalUploaded = 0;
     var errors = 0;
 
     for (final appId in enabledApps) {
       final appConfig = _peer.apps[appId];
       if (appConfig == null) continue;
       final style = appConfig.style;
-      if (style != SyncStyle.sendReceive && style != SyncStyle.receiveOnly) {
-        continue;
-      }
+      if (style == SyncStyle.paused) continue;
       try {
-        final result = await syncService.syncFolder(peerUrl, appId);
+        final result = await syncService.syncFolder(
+          peerUrl,
+          appId,
+          syncStyle: style,
+          ignorePatterns: appConfig.ignorePatterns,
+        );
         if (result.success) {
           totalAdded += result.filesAdded;
           totalModified += result.filesModified;
+          totalUploaded += result.filesUploaded;
         } else {
           errors++;
         }
@@ -1153,9 +1168,14 @@ class _PeerSettingsPageState extends State<PeerSettingsPage> {
     await _configService.markPeerSynced(_peer.peerId);
 
     if (mounted) {
+      final parts = <String>[];
+      if (totalAdded > 0) parts.add('+$totalAdded new');
+      if (totalModified > 0) parts.add('~$totalModified updated');
+      if (totalUploaded > 0) parts.add('↑$totalUploaded uploaded');
+      final summary = parts.isEmpty ? 'No changes.' : parts.join(', ');
       final msg = errors > 0
-          ? 'Sync done with $errors error(s). +$totalAdded new, ~$totalModified updated.'
-          : 'Sync complete. +$totalAdded new, ~$totalModified updated.';
+          ? 'Sync done with $errors error(s). $summary'
+          : 'Sync complete. $summary';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(msg)),
       );
