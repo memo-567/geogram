@@ -4,13 +4,15 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
 
 import '../models/mirror_config.dart';
 import '../services/mirror_config_service.dart';
-import '../services/station_discovery_service.dart';
 
 /// Wizard for pairing a new mirror device
 class MirrorWizardPage extends StatefulWidget {
@@ -827,33 +829,123 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
     });
 
     final selectedId = _selectedDevice?.id;
+    final found = <_DiscoveredDevice>[];
 
     try {
-      await StationDiscoveryService().scanWithProgress(
-        onProgress: (message, scanned, total, results) {
-          if (!mounted || _scanCancelled) return;
+      // Get local IPv4 addresses
+      final localIps = <String>[];
+      try {
+        final interfaces = await NetworkInterface.list(
+          type: InternetAddressType.IPv4,
+          includeLoopback: false,
+        );
+        for (final iface in interfaces) {
+          for (final addr in iface.addresses) {
+            if (!addr.isLoopback &&
+                (addr.address.startsWith('192.') ||
+                    addr.address.startsWith('10.') ||
+                    addr.address.startsWith('172.'))) {
+              localIps.add(addr.address);
+            }
+          }
+        }
+      } catch (_) {}
+
+      if (localIps.isEmpty || _scanCancelled) return;
+
+      // Extract unique subnets
+      final subnets = localIps
+          .map((ip) => ip.substring(0, ip.lastIndexOf('.')))
+          .toSet();
+
+      // Build list of all IPs to scan (excluding our own)
+      final targets = <String>[];
+      for (final subnet in subnets) {
+        for (var i = 1; i <= 254; i++) {
+          final ip = '$subnet.$i';
+          if (!localIps.contains(ip)) {
+            targets.add(ip);
+          }
+        }
+      }
+
+      // Scan in batches of 50 concurrent requests
+      const batchSize = 50;
+      const port = 3456;
+      final timeout = Duration(milliseconds: 400);
+
+      for (var i = 0; i < targets.length; i += batchSize) {
+        if (_scanCancelled || !mounted) break;
+
+        final batch = targets.sublist(
+          i,
+          (i + batchSize).clamp(0, targets.length),
+        );
+
+        final futures = batch.map((ip) async {
+          try {
+            final uri = Uri.parse('http://$ip:$port/api/status');
+            final response = await http
+                .get(uri)
+                .timeout(timeout);
+            if (response.statusCode == 200) {
+              final body = response.body;
+              // Accept any geogram response
+              if (body.contains('Geogram') || body.contains('geogram')) {
+                try {
+                  final json = jsonDecode(body) as Map<String, dynamic>;
+                  final name = (json['nickname'] as String?) ??
+                      (json['callsign'] as String?) ??
+                      ip;
+                  final platform =
+                      (json['platform'] as String?) ?? 'Unknown';
+                  return _DiscoveredDevice(
+                    id: '$ip:$port',
+                    name: name,
+                    address: '$ip:$port',
+                    platform: platform,
+                    method: 'lan',
+                  );
+                } catch (_) {
+                  // Valid response but not JSON — still a geogram device
+                  return _DiscoveredDevice(
+                    id: '$ip:$port',
+                    name: ip,
+                    address: '$ip:$port',
+                    platform: 'Unknown',
+                    method: 'lan',
+                  );
+                }
+              }
+            }
+          } catch (_) {
+            // Timeout or connection refused — not a geogram device
+          }
+          return null;
+        });
+
+        final results = await Future.wait(futures);
+
+        for (final device in results) {
+          if (device != null) {
+            found.add(device);
+          }
+        }
+
+        // Update UI in real-time as batches complete
+        if (mounted && !_scanCancelled) {
           setState(() {
-            _discoveredDevices = results.map((r) {
-              return _DiscoveredDevice(
-                id: '${r.ip}:${r.port}',
-                name: r.displayName,
-                address: '${r.ip}:${r.port}',
-                platform: r.type,
-                method: 'lan',
-              );
-            }).toList();
+            _discoveredDevices = List.of(found);
             // Preserve selection across re-scans
-            if (selectedId != null &&
-                _selectedDevice != null &&
-                _discoveredDevices.any((d) => d.id == selectedId)) {
-              _selectedDevice = _discoveredDevices.firstWhere(
-                (d) => d.id == selectedId,
-              );
+            if (selectedId != null) {
+              final match = found.where((d) => d.id == selectedId);
+              if (match.isNotEmpty) {
+                _selectedDevice = match.first;
+              }
             }
           });
-        },
-        shouldCancel: () => _scanCancelled,
-      );
+        }
+      }
     } finally {
       if (mounted) {
         setState(() {
