@@ -1,0 +1,54 @@
+{
+  "kind": "app",
+  "id": "com.example.my-weather",
+  "name": "My Weather",
+  "version": "1.2.0",
+  "folder_name": "my-weather",
+  "description": "Real-time weather dashboard with forecasts, alerts, and historical data",
+  "repository": "https://github.com/example/my-weather.git",
+  "entry_points": {
+    "gui": "main.js",
+    "api": "api.js",
+    "cli": "cli.js"
+  },
+  "platforms": ["desktop", "mobile", "web", "esp32"],
+  "permissions": ["storage", "network", "geolocation"],
+  "min_geogram_version": "2.0.0",
+  "icon": "assets/icon.png",
+  "author": {
+    "name": "Weather Dev",
+    "npub": "npub1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq3rl2uv",
+    "url": "https://example.com/weather-dev"
+  },
+  "license": "MIT",
+  "signature": {
+    "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "sig": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+    "signed_at": "2026-02-01T10:00:00Z",
+    "files": [
+      "manifest.json",
+      "main.js",
+      "api.js",
+      "cli.js",
+      "assets/icon.png"
+    ]
+  },
+  "translations": {
+    "pt": {
+      "name": "Meu Clima",
+      "description": "Painel meteorologico em tempo real com previsoes, alertas e dados historicos"
+    },
+    "es": {
+      "name": "Mi Clima",
+      "description": "Panel meteorologico en tiempo real con pronosticos, alertas y datos historicos"
+    }
+  },
+  "platform_overrides": {
+    "esp32": {
+      "entry_points": {
+        "cli": "cli.js"
+      },
+      "permissions": ["storage", "network"]
+    }
+  }
+}

@@ -1,0 +1,219 @@
+{
+  "_comment": "Example JSON widget tree for a weather dashboard app",
+  "type": "Column",
+  "children": [
+    {
+      "type": "AppBar",
+      "title": "My Weather",
+      "actions": [
+        {
+          "type": "IconButton",
+          "icon": "refresh",
+          "onPressed": "handleRefresh",
+          "tooltip": "Refresh weather data"
+        },
+        {
+          "type": "IconButton",
+          "icon": "settings",
+          "onPressed": "handleOpenSettings",
+          "tooltip": "Settings"
+        }
+      ]
+    },
+    {
+      "type": "ScrollView",
+      "direction": "vertical",
+      "children": [
+        {
+          "type": "Container",
+          "padding": { "all": 16 },
+          "child": {
+            "type": "Card",
+            "elevation": 2,
+            "child": {
+              "type": "Padding",
+              "padding": { "all": 16 },
+              "child": {
+                "type": "Column",
+                "crossAxisAlignment": "center",
+                "children": [
+                  {
+                    "type": "Icon",
+                    "icon": "wb_sunny",
+                    "size": 64,
+                    "color": "#FFA726"
+                  },
+                  {
+                    "type": "SizedBox",
+                    "height": 8
+                  },
+                  {
+                    "type": "Text",
+                    "id": "temperature-text",
+                    "text": "23°C",
+                    "style": {
+                      "fontSize": 48,
+                      "fontWeight": "bold"
+                    }
+                  },
+                  {
+                    "type": "Text",
+                    "id": "condition-text",
+                    "text": "Sunny",
+                    "style": {
+                      "fontSize": 18,
+                      "color": "#757575"
+                    }
+                  },
+                  {
+                    "type": "Text",
+                    "id": "location-text",
+                    "text": "London, UK",
+                    "style": {
+                      "fontSize": 14,
+                      "color": "#9E9E9E"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "Padding",
+          "padding": { "horizontal": 16 },
+          "child": {
+            "type": "Row",
+            "mainAxisAlignment": "spaceEvenly",
+            "children": [
+              {
+                "type": "Column",
+                "crossAxisAlignment": "center",
+                "children": [
+                  { "type": "Icon", "icon": "water_drop", "size": 24, "color": "#42A5F5" },
+                  { "type": "SizedBox", "height": 4 },
+                  { "type": "Text", "id": "humidity-value", "text": "65%", "style": { "fontWeight": "bold" } },
+                  { "type": "Text", "text": "Humidity", "style": { "fontSize": 12, "color": "#9E9E9E" } }
+                ]
+              },
+              {
+                "type": "Column",
+                "crossAxisAlignment": "center",
+                "children": [
+                  { "type": "Icon", "icon": "air", "size": 24, "color": "#78909C" },
+                  { "type": "SizedBox", "height": 4 },
+                  { "type": "Text", "id": "wind-value", "text": "12 km/h", "style": { "fontWeight": "bold" } },
+                  { "type": "Text", "text": "Wind", "style": { "fontSize": 12, "color": "#9E9E9E" } }
+                ]
+              },
+              {
+                "type": "Column",
+                "crossAxisAlignment": "center",
+                "children": [
+                  { "type": "Icon", "icon": "visibility", "size": 24, "color": "#AB47BC" },
+                  { "type": "SizedBox", "height": 4 },
+                  { "type": "Text", "id": "visibility-value", "text": "10 km", "style": { "fontWeight": "bold" } },
+                  { "type": "Text", "text": "Visibility", "style": { "fontSize": 12, "color": "#9E9E9E" } }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "SizedBox",
+          "height": 16
+        },
+        {
+          "type": "Padding",
+          "padding": { "horizontal": 16 },
+          "child": {
+            "type": "Text",
+            "text": "5-Day Forecast",
+            "style": {
+              "fontSize": 18,
+              "fontWeight": "bold"
+            }
+          }
+        },
+        {
+          "type": "SizedBox",
+          "height": 8
+        },
+        {
+          "type": "ListView",
+          "children": [
+            {
+              "type": "ListTile",
+              "leading": { "type": "Icon", "icon": "wb_sunny", "color": "#FFA726" },
+              "title": "Monday",
+              "subtitle": "Sunny, 24°C / 15°C",
+              "trailing": { "type": "Text", "text": "0% rain" }
+            },
+            {
+              "type": "ListTile",
+              "leading": { "type": "Icon", "icon": "wb_cloudy", "color": "#90A4AE" },
+              "title": "Tuesday",
+              "subtitle": "Cloudy, 20°C / 13°C",
+              "trailing": { "type": "Text", "text": "20% rain" }
+            },
+            {
+              "type": "ListTile",
+              "leading": { "type": "Icon", "icon": "grain", "color": "#42A5F5" },
+              "title": "Wednesday",
+              "subtitle": "Rain, 17°C / 11°C",
+              "trailing": { "type": "Text", "text": "80% rain" }
+            },
+            {
+              "type": "ListTile",
+              "leading": { "type": "Icon", "icon": "wb_sunny", "color": "#FFA726" },
+              "title": "Thursday",
+              "subtitle": "Partly Sunny, 21°C / 12°C",
+              "trailing": { "type": "Text", "text": "10% rain" }
+            },
+            {
+              "type": "ListTile",
+              "leading": { "type": "Icon", "icon": "wb_sunny", "color": "#FFA726" },
+              "title": "Friday",
+              "subtitle": "Sunny, 25°C / 16°C",
+              "trailing": { "type": "Text", "text": "0% rain" }
+            }
+          ]
+        },
+        {
+          "type": "SizedBox",
+          "height": 16
+        },
+        {
+          "type": "Padding",
+          "padding": { "horizontal": 16, "vertical": 8 },
+          "child": {
+            "type": "Row",
+            "mainAxisAlignment": "spaceEvenly",
+            "children": [
+              {
+                "type": "Button",
+                "text": "Change Location",
+                "onPressed": "handleChangeLocation"
+              },
+              {
+                "type": "TextButton",
+                "text": "View Radar",
+                "onPressed": "handleViewRadar"
+              }
+            ]
+          }
+        },
+        {
+          "type": "Padding",
+          "padding": { "horizontal": 16, "vertical": 8 },
+          "child": {
+            "type": "TextField",
+            "id": "search-city",
+            "hint": "Search city...",
+            "onChanged": "handleCitySearch"
+          }
+        }
+      ]
+    }
+  ]
+}

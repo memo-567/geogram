@@ -1,0 +1,101 @@
+{
+  "kind": "extension",
+  "id": "com.example.tracker-satellite",
+  "name": "Tracker Satellite View",
+  "version": "0.5.0",
+  "folder_name": "tracker-satellite",
+  "description": "Adds satellite pass prediction, sky view, and TLE tracking to the Tracker app",
+  "repository": "https://github.com/example/tracker-satellite.git",
+  "entry_points": {
+    "gui": "main.js",
+    "api": "api.js"
+  },
+  "platforms": ["desktop", "mobile"],
+  "permissions": ["storage", "host_read", "network"],
+  "min_geogram_version": "2.0.0",
+  "icon": "assets/icon.png",
+  "author": {
+    "name": "Satellite Dev",
+    "npub": "npub1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxa0b1c2",
+    "url": "https://example.com/satellite-dev"
+  },
+  "license": "MIT",
+  "signature": {
+    "hash": "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592",
+    "sig": "f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2",
+    "signed_at": "2026-02-03T14:00:00Z",
+    "files": [
+      "manifest.json",
+      "main.js",
+      "api.js",
+      "assets/icon.png"
+    ]
+  },
+  "translations": {
+    "pt": {
+      "name": "Satelites para Tracker",
+      "description": "Adiciona previsao de passagens de satelites, visao do ceu e rastreamento TLE ao Tracker"
+    }
+  },
+  "extends": [
+    {
+      "app": "tracker",
+      "hooks": [
+        {
+          "type": "tab",
+          "id": "satellite-tab",
+          "label": "Satellites",
+          "icon": "satellite_alt",
+          "entry_point": "main.js",
+          "function": "renderSatelliteTab",
+          "position": "end"
+        },
+        {
+          "type": "settings",
+          "id": "satellite-settings",
+          "label": "Satellite Settings",
+          "icon": "settings",
+          "entry_point": "main.js",
+          "function": "renderSatelliteSettings"
+        },
+        {
+          "type": "data_type",
+          "id": "satellite-pass",
+          "label": "Satellite Pass",
+          "icon": "satellite",
+          "entry_point": "main.js",
+          "function": "handleSatelliteData",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "satellite_name": { "type": "string" },
+              "norad_id": { "type": "integer" },
+              "pass_start": { "type": "string", "format": "date-time" },
+              "pass_end": { "type": "string", "format": "date-time" },
+              "max_elevation": { "type": "number" },
+              "direction": { "type": "string" }
+            },
+            "required": ["satellite_name", "norad_id", "pass_start"]
+          }
+        },
+        {
+          "type": "action",
+          "id": "predict-pass",
+          "label": "Predict Next Pass",
+          "icon": "schedule",
+          "entry_point": "main.js",
+          "function": "predictNextPass",
+          "context": "global"
+        },
+        {
+          "type": "widget",
+          "id": "next-pass-widget",
+          "label": "Next Satellite Pass",
+          "slot": "header",
+          "entry_point": "main.js",
+          "function": "renderNextPassWidget"
+        }
+      ]
+    }
+  ]
+}

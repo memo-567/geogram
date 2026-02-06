@@ -85,6 +85,14 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [SourceService](#sourceservice) - Source.js discovery and parsing
 - [ReaderService](#readerservice) - Main reader service orchestrating all content types
 
+### Installer Patterns
+- [Installer Registry Pattern](#installer-registry-pattern) - Package registry JSON management
+- [JSON Widget Tree Renderer](#json-widget-tree-renderer) - Render JSON-described UI as Flutter widgets
+- [JS Sandbox API Bridge](#js-sandbox-api-bridge) - Host API injection for QuickJS contexts
+- [Extension Hook System](#extension-hook-system) - Plugin registration and lifecycle for core apps
+- [Manifest Validation](#manifest-validation) - Package manifest schema validation
+- [Folder Name Collision Check](#folder-name-collision-check) - Validate against reserved app type names
+
 ### Flasher Components
 - [FlasherService](#flasherservice) - Main service for flash operations
 - [FlasherStorageService](#flasherstorageservice) - Device definitions storage (v1.0 and v2.0)
@@ -7875,3 +7883,105 @@ Future<List<String>> _getLocalIpAddresses() async {
 - Filters to private network ranges (192.x, 10.x, 172.x)
 - Requires `dart:io` — not available on web
 - Consider extracting to a shared utility if used in more places
+
+---
+
+## Installer Patterns
+
+### Installer Registry Pattern
+
+**Pattern**: JSON-based package registry for tracking installed third-party packages.
+
+**Location**: `installed/registry.json` within each user profile
+
+**Reuse potential**: The registry pattern (JSON file with versioned schema, array of entries, timestamps, and enabled/disabled state) is applicable to any feature that manages a list of user-installed or user-configured items.
+
+**Key structure**:
+```json
+{
+  "version": "1.0",
+  "packages": [
+    {
+      "id": "com.example.package",
+      "folder_name": "package-name",
+      "kind": "app",
+      "version": "1.0.0",
+      "installed_at": "ISO-8601",
+      "enabled": true
+    }
+  ]
+}
+```
+
+**See**: [docs/installer/installer-format-specification.md](installer/installer-format-specification.md)
+
+---
+
+### JSON Widget Tree Renderer
+
+**Pattern**: JSON-to-Flutter widget tree rendering. JS apps describe UI as JSON objects with `type`, `children`, and properties. The Flutter host maps these to native widgets.
+
+**Reuse potential**: This renderer can be reused by any feature that needs to display user-defined or remote-defined UI layouts — for example, dynamic forms, server-driven UI, or theming.
+
+**Key structure**:
+```json
+{
+  "type": "Column",
+  "children": [
+    { "type": "Text", "text": "Hello", "style": { "fontSize": 24 } },
+    { "type": "Button", "text": "Click", "onPressed": "handleClick" }
+  ]
+}
+```
+
+**See**: [docs/installer/js-runtime-api.md](installer/js-runtime-api.md#json-widget-tree-specification)
+
+---
+
+### JS Sandbox API Bridge
+
+**Pattern**: Injecting a controlled set of host APIs into a sandboxed JS engine (QuickJS via flutter_js). Each API namespace is gated by a named permission.
+
+**Reuse potential**: The bridge pattern (Dart function registered as a JS global, permission-checked, returning Futures mapped to JS Promises) is reusable for any QuickJS-based scripting feature.
+
+**See**: [docs/installer/js-runtime-api.md](installer/js-runtime-api.md)
+
+---
+
+### Extension Hook System
+
+**Pattern**: Third-party extensions declare hook points in their manifest. Core apps query a registration directory to discover and load extensions at runtime.
+
+**Reuse potential**: The hook point pattern (registration files in a well-known directory, lifecycle callbacks, render functions returning widget trees) can be applied to any plugin system.
+
+**See**: [docs/installer/extension-mechanism.md](installer/extension-mechanism.md)
+
+---
+
+### Manifest Validation
+
+**Pattern**: JSON manifest validation with field tables, required/optional fields, semver version checking, and cross-reference validation.
+
+**Reuse potential**: The validation approach (schema check → file existence check → cross-reference check → size limit check) is a general pattern for validating any package or bundle format.
+
+**See**: [docs/installer/manifest-schema.md](installer/manifest-schema.md#validation-rules)
+
+---
+
+### Folder Name Collision Check
+
+**Pattern**: Validating user-provided folder names against a reserved list derived from `knownAppTypesConst`.
+
+**Reuse potential**: Any feature that creates user-named directories within the profile should check against the reserved names list to avoid collisions with core apps.
+
+**Key code reference**: `lib/util/app_constants.dart` — `knownAppTypesConst`
+
+**Validation**:
+```dart
+bool isReservedName(String name) {
+  final reserved = {...knownAppTypesConst, 'flasher', 'shared_folder', 'installed', 'extensions'};
+  return reserved.contains(name.toLowerCase());
+}
+```
+
+**See**: [docs/installer/manifest-schema.md](installer/manifest-schema.md#reserved-folder-names)
