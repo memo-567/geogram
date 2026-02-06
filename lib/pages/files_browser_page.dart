@@ -12,8 +12,10 @@ import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:url_launcher/url_launcher.dart';
 
+import '../services/app_service.dart';
 import '../services/i18n_service.dart';
 import '../services/profile_service.dart';
+import '../services/profile_storage.dart';
 import '../widgets/file_folder_picker.dart';
 import '../widgets/video_player_widget.dart';
 import 'document_viewer_editor_page.dart';
@@ -108,6 +110,16 @@ class _FilesBrowserPageState extends State<FilesBrowserPage> {
   }
 
   void _openFile(String path) {
+    // For encrypted storage, extract to temp before opening
+    final storage = AppService().profileStorage;
+    if (storage != null && storage.isEncrypted) {
+      final basePath = storage.basePath;
+      if (path.startsWith('$basePath/')) {
+        _openEncryptedFile(path, storage);
+        return;
+      }
+    }
+
     final ext = p.extension(path).toLowerCase().replaceFirst('.', '');
     final isWide = MediaQuery.of(context).size.width >= 800;
 
@@ -130,6 +142,41 @@ class _FilesBrowserPageState extends State<FilesBrowserPage> {
     }
 
     _openFileFull(path);
+  }
+
+  Future<void> _openEncryptedFile(String path, ProfileStorage storage) async {
+    final basePath = storage.basePath;
+    final relativePath = path.substring(basePath.length + 1);
+    final fileName = p.basename(path);
+    final tempPath = p.join(Directory.systemTemp.path, 'geogram_preview_$fileName');
+
+    try {
+      await storage.copyToExternal(relativePath, tempPath);
+
+      final ext = p.extension(path).toLowerCase().replaceFirst('.', '');
+      final isWide = mounted && MediaQuery.of(context).size.width >= 800;
+
+      if (isWide && _isPreviewable(ext)) {
+        _transformController.value = Matrix4.identity();
+        setState(() {
+          _previewPath = tempPath;
+          _previewExt = ext;
+          // No prev/next navigation for encrypted files
+          _folderFiles = [];
+          _currentFileIndex = 0;
+        });
+        _pickerKey.currentState?.selectFile(path);
+        return;
+      }
+
+      _openFileFull(tempPath);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to open file: $e')),
+        );
+      }
+    }
   }
 
   void _loadFolderFiles(String filePath, Set<String> extensions) {
@@ -317,6 +364,7 @@ class _FilesBrowserPageState extends State<FilesBrowserPage> {
       onFileOpen: _openFile,
       allowMultiSelect: false,
       onStateChanged: () => setState(() {}),
+      profileStorage: AppService().profileStorage,
       extraLocations: [
         StorageLocation(
           name: ProfileService().getProfile().callsign,

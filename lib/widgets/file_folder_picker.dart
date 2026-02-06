@@ -10,6 +10,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../models/file_browser_cache_models.dart';
 import '../pages/transfer_send_page.dart';
 import '../services/file_browser_cache_service.dart';
+import '../services/profile_storage.dart';
 import '../services/recent_files_service.dart';
 import '../util/video_metadata_extractor.dart';
 
@@ -98,6 +99,11 @@ class FileFolderPicker extends StatefulWidget {
   /// so the parent can rebuild its AppBar actions.
   final VoidCallback? onStateChanged;
 
+  /// Optional profile storage for reading files inside the callsign folder.
+  /// When provided, directories inside the storage base path will be listed
+  /// via ProfileStorage instead of raw filesystem access.
+  final ProfileStorage? profileStorage;
+
   const FileFolderPicker({
     super.key,
     this.initialDirectory,
@@ -108,6 +114,7 @@ class FileFolderPicker extends StatefulWidget {
     this.explorerMode = false,
     this.extraLocations,
     this.onStateChanged,
+    this.profileStorage,
   });
 
   /// Show the picker as a full-screen dialog
@@ -210,6 +217,65 @@ class FileFolderPickerState extends State<FileFolderPicker> {
   Future<void> _initializeCacheService() async {
     await _cacheService.initialize();
     _cacheInitialized = true;
+  }
+
+  /// Whether the current directory is inside the profile storage base path.
+  bool _isInsideProfileStorage() {
+    final storage = widget.profileStorage;
+    if (storage == null) return false;
+    final basePath = storage.basePath;
+    final dirPath = _currentDirectory.path;
+    return dirPath == basePath || dirPath.startsWith('$basePath/');
+  }
+
+  /// Load directory contents from ProfileStorage instead of raw filesystem.
+  Future<void> _loadDirectoryFromStorage() async {
+    final storage = widget.profileStorage!;
+    final basePath = storage.basePath;
+    final dirPath = _currentDirectory.path;
+
+    // Compute relative path within the storage
+    final relativePath = dirPath == basePath
+        ? ''
+        : dirPath.substring(basePath.length + 1);
+
+    try {
+      final entries = await storage.listDirectory(relativePath);
+      final items = <FileSystemItem>[];
+
+      for (final entry in entries) {
+        final name = entry.name;
+        if (!_showHidden && name.startsWith('.')) continue;
+
+        items.add(FileSystemItem(
+          path: storage.getAbsolutePath(entry.path),
+          name: name,
+          isDirectory: entry.isDirectory,
+          size: entry.size ?? 0,
+          modified: entry.modified ?? DateTime.now(),
+          type: entry.isDirectory
+              ? FileSystemEntityType.directory
+              : FileSystemEntityType.file,
+        ));
+      }
+
+      _sortItems(items);
+
+      if (mounted) {
+        setState(() {
+          _items = items;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _items = [];
+          _isLoading = false;
+          _error = 'Cannot access this folder';
+        });
+      }
+    }
   }
 
   Future<void> _detectStorageLocations() async {
@@ -392,6 +458,12 @@ class FileFolderPickerState extends State<FileFolderPicker> {
       _error = null;
     });
 
+    // Use ProfileStorage when inside the profile folder
+    if (_isInsideProfileStorage()) {
+      await _loadDirectoryFromStorage();
+      return;
+    }
+
     try {
       final dirPath = _currentDirectory.path;
 
@@ -515,6 +587,11 @@ class FileFolderPickerState extends State<FileFolderPicker> {
   }
 
   Future<void> _calculateFolderSize(String folderPath) async {
+    // Skip folder size calculation for paths inside profile storage
+    if (widget.profileStorage != null) {
+      final basePath = widget.profileStorage!.basePath;
+      if (folderPath == basePath || folderPath.startsWith('$basePath/')) return;
+    }
     if (_calculatingFolders.contains(folderPath)) return;
     _calculatingFolders.add(folderPath);
     if (mounted) setState(() {});
