@@ -38,7 +38,6 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
   String _manualAddress = '';
   final Map<String, bool> _selectedApps = {};
   final Map<String, SyncStyle> _appStyles = {};
-  InitialSyncOption _initialSyncOption = InitialSyncOption.downloadAll;
 
   // Available apps to sync
   final List<_AppInfo> _availableApps = [
@@ -113,7 +112,6 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
                 _buildIntroStep(),
                 _buildDiscoveryStep(),
                 _buildAppsStep(),
-                _buildInitialSyncStep(),
                 _buildCompleteStep(),
               ],
             ),
@@ -127,7 +125,7 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
   }
 
   Widget _buildStepIndicator() {
-    final steps = ['Intro', 'Find', 'Apps', 'Sync', 'Done'];
+    final steps = ['Intro', 'Find', 'Apps', 'Done'];
 
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 16),
@@ -539,97 +537,6 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
     );
   }
 
-  Widget _buildInitialSyncStep() {
-    final theme = Theme.of(context);
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Initial Sync',
-            style: theme.textTheme.headlineSmall?.copyWith(
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'The other device has existing data. How should we proceed?',
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: theme.colorScheme.outline,
-            ),
-          ),
-          const SizedBox(height: 24),
-          _buildSyncOptionTile(
-            InitialSyncOption.downloadAll,
-            'Download all existing data',
-            'Get everything from the other device (recommended)',
-            Icons.cloud_download,
-          ),
-          _buildSyncOptionTile(
-            InitialSyncOption.startFresh,
-            'Start fresh',
-            'Keep current data, sync only new changes going forward',
-            Icons.fiber_new,
-          ),
-          _buildSyncOptionTile(
-            InitialSyncOption.uploadMine,
-            'Replace with my data',
-            'Upload my data to the other device',
-            Icons.cloud_upload,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSyncOptionTile(
-    InitialSyncOption option,
-    String title,
-    String subtitle,
-    IconData icon,
-  ) {
-    final theme = Theme.of(context);
-    final isSelected = _initialSyncOption == option;
-
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      color: isSelected ? theme.colorScheme.primaryContainer : null,
-      child: ListTile(
-        leading: Icon(
-          icon,
-          color: isSelected
-              ? theme.colorScheme.primary
-              : theme.colorScheme.outline,
-        ),
-        title: Text(
-          title,
-          style: TextStyle(
-            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-          ),
-        ),
-        subtitle: Text(subtitle),
-        trailing: Radio<InitialSyncOption>(
-          value: option,
-          groupValue: _initialSyncOption,
-          onChanged: (value) {
-            if (value != null) {
-              setState(() {
-                _initialSyncOption = value;
-              });
-            }
-          },
-        ),
-        onTap: () {
-          setState(() {
-            _initialSyncOption = option;
-          });
-        },
-      ),
-    );
-  }
-
   Widget _buildCompleteStep() {
     final theme = Theme.of(context);
     final selectedAppCount =
@@ -697,7 +604,7 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
                   ),
                   const Divider(height: 24),
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Column(
                         children: [
@@ -710,29 +617,6 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
                           ),
                           Text(
                             'Apps to sync',
-                            style: theme.textTheme.bodySmall,
-                          ),
-                        ],
-                      ),
-                      Column(
-                        children: [
-                          Icon(
-                            _initialSyncOption == InitialSyncOption.downloadAll
-                                ? Icons.cloud_download
-                                : _initialSyncOption ==
-                                        InitialSyncOption.uploadMine
-                                    ? Icons.cloud_upload
-                                    : Icons.fiber_new,
-                            size: 32,
-                            color: theme.colorScheme.primary,
-                          ),
-                          Text(
-                            _initialSyncOption == InitialSyncOption.downloadAll
-                                ? 'Download'
-                                : _initialSyncOption ==
-                                        InitialSyncOption.uploadMine
-                                    ? 'Upload'
-                                    : 'Fresh start',
                             style: theme.textTheme.bodySmall,
                           ),
                         ],
@@ -750,7 +634,7 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
 
   Widget _buildNavigationButtons() {
     final isFirstStep = _currentStep == 0;
-    final isLastStep = _currentStep == 4;
+    final isLastStep = _currentStep == 3;
     final canProceed = _canProceed();
 
     return Container(
@@ -795,15 +679,13 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
         return _selectedDevice != null || _manualAddress.isNotEmpty;
       case 2: // Apps
         return _selectedApps.values.any((v) => v);
-      case 3: // Initial sync
-        return true;
       default:
         return true;
     }
   }
 
   void _nextStep() {
-    if (_currentStep < 4) {
+    if (_currentStep < 3) {
       // Cancel discovery when leaving step 1
       if (_currentStep == 1) {
         _discoveryTimer?.cancel();
@@ -1079,27 +961,25 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
       await _configService.setEnabled(true);
     }
 
-    // 4. Initial sync if downloadAll is selected
-    if (_initialSyncOption == InitialSyncOption.downloadAll) {
-      for (final appId in selectedAppIds) {
-        final style = _appStyles[appId] ?? SyncStyle.sendReceive;
-        if (style != SyncStyle.paused) {
-          try {
-            final appConfig = apps[appId];
-            await syncService.syncFolder(
-              peerUrl,
-              appId,
-              peerCallsign: remoteCallsign,
-              syncStyle: style,
-              ignorePatterns: appConfig?.ignorePatterns ?? const [],
-            );
-          } catch (e) {
-            LogService().log('MirrorWizard: Initial sync failed for $appId: $e');
-          }
+    // 4. Initial sync — push local data to the new peer
+    for (final appId in selectedAppIds) {
+      final style = _appStyles[appId] ?? SyncStyle.sendReceive;
+      if (style != SyncStyle.paused) {
+        try {
+          final appConfig = apps[appId];
+          await syncService.syncFolder(
+            peerUrl,
+            appId,
+            peerCallsign: remoteCallsign,
+            syncStyle: style,
+            ignorePatterns: appConfig?.ignorePatterns ?? const [],
+          );
+        } catch (e) {
+          LogService().log('MirrorWizard: Initial sync failed for $appId: $e');
         }
       }
-      await _configService.markPeerSynced(peerId);
     }
+    await _configService.markPeerSynced(peerId);
 
     if (mounted) {
       Navigator.pop(context);
@@ -1140,9 +1020,3 @@ class _AppInfo {
   _AppInfo(this.id, this.name, this.description, this.icon);
 }
 
-/// Initial sync options
-enum InitialSyncOption {
-  downloadAll,
-  startFresh,
-  uploadMine,
-}
