@@ -428,40 +428,10 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
         title: Text(_i18n.t('manage_profiles')),
         actions: [
           if (!kIsWeb)
-            PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert),
-              onSelected: (value) {
-                switch (value) {
-                  case 'import_export':
-                    _showImportExportDialog();
-                    break;
-                  case 'setup_mirror':
-                    _setupMirror();
-                    break;
-                }
-              },
-              itemBuilder: (context) => [
-                PopupMenuItem(
-                  value: 'import_export',
-                  child: Row(
-                    children: [
-                      const Icon(Icons.import_export),
-                      const SizedBox(width: 8),
-                      Text(_i18n.t('import_export_profiles')),
-                    ],
-                  ),
-                ),
-                PopupMenuItem(
-                  value: 'setup_mirror',
-                  child: Row(
-                    children: [
-                      const Icon(Icons.sync_alt),
-                      const SizedBox(width: 8),
-                      Text(_i18n.tOrDefault('setup_mirror', 'Setup Mirror')),
-                    ],
-                  ),
-                ),
-              ],
+            IconButton(
+              icon: const Icon(Icons.import_export),
+              onPressed: _showImportExportDialog,
+              tooltip: _i18n.t('import_export_profiles'),
             ),
         ],
       ),
@@ -470,10 +440,25 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
           : _profiles.isEmpty
               ? _buildEmptyState()
               : _buildProfileList(),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _createNewProfile,
-        icon: const Icon(Icons.add),
-        label: Text(_i18n.t('new_profile')),
+      floatingActionButton: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (!kIsWeb)
+            FloatingActionButton.extended(
+              heroTag: 'setup_mirror',
+              onPressed: _setupMirror,
+              icon: const Icon(Icons.sync_alt),
+              label: const Text('Mirror'),
+            ),
+          if (!kIsWeb)
+            const SizedBox(width: 12),
+          FloatingActionButton.extended(
+            heroTag: 'new_profile',
+            onPressed: _createNewProfile,
+            icon: const Icon(Icons.add),
+            label: Text(_i18n.t('new_profile')),
+          ),
+        ],
       ),
     );
   }

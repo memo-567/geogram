@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
+import '../services/log_api_service.dart';
 
 /// Passive mirror setup page — shows this device's IP address
 /// so the other device can add it via Settings > Mirror > Add Device.
@@ -28,6 +29,7 @@ class _SetupMirrorPageState extends State<SetupMirrorPage> {
   @override
   void initState() {
     super.initState();
+    LogApiService.mirrorSetupOpen = true;
     _fetchIpAddresses();
     _pollTimer = Timer.periodic(
         const Duration(seconds: 3), (_) => _fetchIpAddresses());
@@ -35,6 +37,7 @@ class _SetupMirrorPageState extends State<SetupMirrorPage> {
 
   @override
   void dispose() {
+    LogApiService.mirrorSetupOpen = false;
     _pollTimer?.cancel();
     super.dispose();
   }

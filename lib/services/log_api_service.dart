@@ -86,6 +86,9 @@ class LogApiService {
   /// Track when the service started for uptime calculation
   DateTime? _startTime;
 
+  /// Flag indicating the SetupMirror page is currently open
+  static bool mirrorSetupOpen = false;
+
   final Map<String, StreamSubscription<double>> _botDownloadSubscriptions = {};
 
   /// Get the configured port from AppArgs (defaults to 3456)
@@ -680,6 +683,11 @@ class LogApiService {
     // Add uptime in seconds
     if (_startTime != null) {
       response['uptime'] = DateTime.now().difference(_startTime!).inSeconds;
+    }
+
+    // Add mirror setup flag if open
+    if (mirrorSetupOpen) {
+      response['mirror_setup_open'] = true;
     }
 
     return shelf.Response.ok(

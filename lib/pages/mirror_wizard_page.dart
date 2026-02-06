@@ -35,7 +35,6 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
   Timer? _discoveryTimer;
   bool _scanCancelled = false;
   _DiscoveredDevice? _selectedDevice;
-  String _manualAddress = '';
   final Map<String, bool> _selectedApps = {};
   final Map<String, SyncStyle> _appStyles = {};
 
@@ -286,7 +285,7 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Make sure the other device has Mirror enabled and is on the same network.',
+            'Make sure the other device has "Mirror" open and is on the same network.',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.outline,
             ),
@@ -306,6 +305,27 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
               ),
             ),
           ],
+          const SizedBox(height: 16),
+          Card(
+            color: theme.colorScheme.secondaryContainer,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, color: theme.colorScheme.onSecondaryContainer),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'The other device must have "Mirror" open to appear here.',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSecondaryContainer,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
           const SizedBox(height: 24),
 
           // Discovered devices
@@ -321,28 +341,6 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
             const SizedBox(height: 24),
           ],
 
-          // Manual entry
-          const Divider(),
-          const SizedBox(height: 16),
-          Text(
-            'Or enter address manually:',
-            style: theme.textTheme.titleSmall,
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            decoration: const InputDecoration(
-              labelText: 'Device Address',
-              hintText: 'e.g., 192.168.1.100 or device.local',
-              border: OutlineInputBorder(),
-            ),
-            onChanged: (value) => _manualAddress = value,
-          ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: _manualAddress.isNotEmpty ? _connectManual : null,
-            icon: const Icon(Icons.link),
-            label: const Text('Connect'),
-          ),
         ],
       ),
     );
@@ -381,7 +379,7 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
             ),
             const SizedBox(width: 4),
             Text(
-              device.address,
+              'port ${device.address.split(':').last}',
               style: TextStyle(
                 fontSize: 12,
                 color: theme.colorScheme.outline,
@@ -606,13 +604,13 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              _selectedDevice?.name ?? 'Manual Device',
+                              _selectedDevice?.name ?? 'Device',
                               style: theme.textTheme.titleMedium?.copyWith(
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
                             Text(
-                              _selectedDevice?.address ?? _manualAddress,
+                              _selectedDevice?.address ?? '',
                               style: theme.textTheme.bodySmall?.copyWith(
                                 color: theme.colorScheme.outline,
                                 fontFamily: 'monospace',
@@ -697,7 +695,7 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
       case 0: // Intro
         return true;
       case 1: // Discovery
-        return _selectedDevice != null || _manualAddress.isNotEmpty;
+        return _selectedDevice != null;
       case 2: // Apps
         return _selectedApps.values.any((v) => v);
       default:
@@ -824,21 +822,20 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
               if (body.contains('Geogram') || body.contains('geogram')) {
                 try {
                   final json = jsonDecode(body) as Map<String, dynamic>;
-                  final name = (json['nickname'] as String?) ??
-                      (json['callsign'] as String?) ??
-                      ip;
                   final platform =
                       (json['platform'] as String?) ?? 'Unknown';
                   final npub = (json['npub'] as String?) ?? '';
                   final callsign = (json['callsign'] as String?) ?? '';
+                  final mirrorSetupOpen = (json['mirror_setup_open'] as bool?) ?? false;
                   return _DiscoveredDevice(
                     id: '$ip:$port',
-                    name: name,
+                    name: ip,
                     address: '$ip:$port',
                     platform: platform,
                     method: 'lan',
                     npub: npub,
                     callsign: callsign,
+                    mirrorSetupOpen: mirrorSetupOpen,
                   );
                 } catch (_) {
                   // Valid response but not JSON — still a geogram device
@@ -861,7 +858,7 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
         final results = await Future.wait(futures);
 
         for (final device in results) {
-          if (device != null) {
+          if (device != null && device.mirrorSetupOpen) {
             found.add(device);
           }
         }
@@ -889,23 +886,8 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
     }
   }
 
-  void _connectManual() {
-    // Create a device from manual entry
-    final device = _DiscoveredDevice(
-      id: const Uuid().v4(),
-      name: 'Manual Device',
-      address: _manualAddress,
-      platform: 'Unknown',
-      method: 'manual',
-    );
-
-    setState(() {
-      _selectedDevice = device;
-    });
-  }
-
   void _finishWizard() async {
-    final address = _selectedDevice?.address ?? _manualAddress;
+    final address = _selectedDevice!.address;
     final peerUrl = 'http://$address';
     final profile = ProfileService().getProfile();
     final syncService = MirrorSyncService.instance;
@@ -1018,6 +1000,7 @@ class _DiscoveredDevice {
   final int? latencyMs;
   final String npub;
   final String callsign;
+  final bool mirrorSetupOpen;
 
   _DiscoveredDevice({
     required this.id,
@@ -1028,6 +1011,7 @@ class _DiscoveredDevice {
     this.latencyMs,
     this.npub = '',
     this.callsign = '',
+    this.mirrorSetupOpen = false,
   });
 }
 
