@@ -10,6 +10,7 @@ import '../services/log_service.dart';
 import '../services/config_service.dart';
 import '../services/app_service.dart';
 import '../services/encrypted_storage_service.dart';
+import '../services/storage_config.dart';
 import '../services/signing_service.dart';
 import '../services/app_args.dart';
 import '../util/event_bus.dart';
@@ -610,6 +611,30 @@ class ProfileService {
     }
 
     _saveAllProfiles();
+
+    // Clean up profile data from disk
+    if (!kIsWeb) {
+      final callsign = deletedProfile.callsign;
+
+      // Close any open encrypted archive first
+      await EncryptedStorageService().closeArchive(callsign);
+
+      // Delete encrypted SQLite archive if it exists
+      final archivePath = StorageConfig().getEncryptedArchivePath(callsign);
+      final archiveFile = File(archivePath);
+      if (await archiveFile.exists()) {
+        await archiveFile.delete();
+        LogService().log('Deleted encrypted archive for $callsign');
+      }
+
+      // Delete profile folder if it exists
+      final profileDir = Directory(StorageConfig().getCallsignDir(callsign));
+      if (await profileDir.exists()) {
+        await profileDir.delete(recursive: true);
+        LogService().log('Deleted profile folder for $callsign');
+      }
+    }
+
     LogService().log('Deleted profile: ${deletedProfile.callsign}');
     return true;
   }
