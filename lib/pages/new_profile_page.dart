@@ -151,6 +151,7 @@ class _NewProfilePageState extends State<NewProfilePage> {
   Isolate? _vanityIsolate;
   ReceivePort? _vanityReceivePort;
   SendPort? _vanitySendPort;
+  bool _disposed = false;
 
   @override
   void initState() {
@@ -163,6 +164,7 @@ class _NewProfilePageState extends State<NewProfilePage> {
 
   @override
   void dispose() {
+    _disposed = true;
     _stopVanityGenerator();
     _vanityPatternController.removeListener(_onVanityPatternChanged);
     _nicknameController.dispose();
@@ -241,7 +243,7 @@ class _NewProfilePageState extends State<NewProfilePage> {
 
     _vanityStopwatch = Stopwatch()..start();
     _vanityTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
-      if (mounted) {
+      if (!_disposed && mounted) {
         setState(() {
           _vanityElapsedTime = _vanityStopwatch!.elapsed;
         });
@@ -266,7 +268,7 @@ class _NewProfilePageState extends State<NewProfilePage> {
         final keysGenerated = message['keysGenerated'] as int;
         final matches = message['matches'] as List<dynamic>;
 
-        if (mounted) {
+        if (!_disposed && mounted) {
           setState(() {
             _vanityKeysGenerated += keysGenerated;
 
@@ -295,7 +297,7 @@ class _NewProfilePageState extends State<NewProfilePage> {
         }
 
         // Request next batch if still running
-        if (_vanityRunning && mounted) {
+        if (_vanityRunning && !_disposed && mounted) {
           _requestNextBatch(pattern);
         }
       }
@@ -323,8 +325,7 @@ class _NewProfilePageState extends State<NewProfilePage> {
     _vanityTimer = null;
     _vanityStopwatch?.stop();
 
-    // Only call setState if widget is still mounted
-    if (mounted) {
+    if (!_disposed && mounted) {
       setState(() {});
     }
   }
@@ -411,34 +412,44 @@ class _NewProfilePageState extends State<NewProfilePage> {
           final privateKeyHex = NostrCrypto.decodeNsec(nsec);
           NostrCrypto.derivePublicKey(privateKeyHex);
 
-          setState(() {
-            _connectionTested = true;
-            _connectionSuccess = true;
-            _remoteStatus = status;
-          });
+          if (!_disposed && mounted) {
+            setState(() {
+              _connectionTested = true;
+              _connectionSuccess = true;
+              _remoteStatus = status;
+            });
+          }
         } catch (e) {
+          if (!_disposed && mounted) {
+            setState(() {
+              _connectionTested = true;
+              _connectionSuccess = false;
+              _testError = 'Invalid NSEC: $e';
+            });
+          }
+        }
+      } else {
+        if (!_disposed && mounted) {
           setState(() {
             _connectionTested = true;
             _connectionSuccess = false;
-            _testError = 'Invalid NSEC: $e';
+            _testError = 'Server returned status ${response.statusCode}';
           });
         }
-      } else {
-        setState(() {
-          _connectionTested = true;
-          _connectionSuccess = false;
-          _testError = 'Server returned status ${response.statusCode}';
-        });
       }
     } catch (e) {
       LogService().log('Connection test failed: $e');
-      setState(() {
-        _connectionTested = true;
-        _connectionSuccess = false;
-        _testError = e.toString();
-      });
+      if (!_disposed && mounted) {
+        setState(() {
+          _connectionTested = true;
+          _connectionSuccess = false;
+          _testError = e.toString();
+        });
+      }
     } finally {
-      setState(() => _isTestingConnection = false);
+      if (!_disposed && mounted) {
+        setState(() => _isTestingConnection = false);
+      }
     }
   }
 
