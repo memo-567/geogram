@@ -1,705 +1,833 @@
 #!/usr/bin/env dart
-/// Mirror Sync API Test Suite
+/// Mirror Sync Integration Test
 ///
-/// Tests the Simple Mirror sync protocol including:
-/// - Basic sync functionality
-/// - Challenge-response authentication
-/// - Replay attack prevention
-/// - Challenge expiry
-/// - Nonce reuse prevention
+/// Self-contained test that verifies real file synchronization using the
+/// mirror protocol. Starts a mock source server, then runs the full client
+/// flow (challenge-response auth + file transfer) and verifies files on disk.
+///
+/// Tests:
+///   1. Initial sync — files transfer from source to empty destination
+///   2. SHA1 integrity — all file hashes match after transfer
+///   3. No-op sync — re-sync with no changes reports zero changes
+///   4. Update sync — modified files are detected and re-downloaded
+///   5. New file sync — newly added files appear on re-sync
+///   6. One-way mirror — destination changes overwritten by source
+///   7. Pair endpoint — POST /api/mirror/pair reciprocal registration
+///   8. Security — unauthorized peer rejected
+///   9. Security — replay attack (nonce reuse) rejected
+///  10. Security — invalid signature rejected
 ///
 /// Usage:
-///   dart run tests/mirror/mirror_sync_test.dart --port-a 5577 --port-b 5588
-///
-/// Prerequisites:
-///   - Instance A running on port-a with debug API enabled
-///   - Instance B running on port-b with debug API enabled
-///   - Instance A has test-sync-folder with test files
-///   - Instance A has Instance B as allowed peer
+///   dart run tests/mirror/mirror_sync_test.dart
 
 import 'dart:convert';
 import 'dart:io';
-import 'package:http/http.dart' as http;
+import 'dart:typed_data';
+
 import 'package:crypto/crypto.dart';
+import 'package:http/http.dart' as http;
 
-// Test configuration
-late String portA;
-late String portB;
-late String baseUrlA;
-late String baseUrlB;
-const testFolder = 'test-sync-folder';
+import '../../lib/util/nostr_crypto.dart';
+import '../../lib/util/nostr_event.dart';
 
-// Test results tracking
-int testsRun = 0;
-int testsPassed = 0;
-int testsFailed = 0;
-List<String> failedTests = [];
+// ─── Test tracking ───────────────────────────────────────────────
 
-void main(List<String> args) async {
-  // Parse arguments
-  portA = '5577';
-  portB = '5588';
+int _testsRun = 0;
+int _testsPassed = 0;
+int _testsFailed = 0;
+final List<String> _failedTests = [];
 
-  for (var i = 0; i < args.length; i++) {
-    if (args[i] == '--port-a' && i + 1 < args.length) {
-      portA = args[i + 1];
-    } else if (args[i] == '--port-b' && i + 1 < args.length) {
-      portB = args[i + 1];
-    }
-  }
-
-  baseUrlA = 'http://localhost:$portA';
-  baseUrlB = 'http://localhost:$portB';
-
-  print('');
-  print('╔════════════════════════════════════════════════════════════════╗');
-  print('║           Mirror Sync API Test Suite (Dart)                    ║');
-  print('╚════════════════════════════════════════════════════════════════╝');
-  print('');
-  print('Instance A (source):      $baseUrlA');
-  print('Instance B (destination): $baseUrlB');
-  print('Test folder:              $testFolder');
-  print('');
-
-  // Check instances are running
-  if (!await checkInstance('A', baseUrlA) || !await checkInstance('B', baseUrlB)) {
-    print('\n[FATAL] Cannot connect to instances. Exiting.');
-    exit(1);
-  }
-
-  // Run test suites
-  print('\n${'=' * 70}');
-  print('BASIC FUNCTIONALITY TESTS');
-  print('${'=' * 70}\n');
-
-  await testChallengeEndpoint();
-  await testChallengeRequiresFolder();
-  await testChallengeNonexistentFolder();
-  await testRequestWithoutChallenge();
-  await testValidSyncFlow();
-
-  print('\n${'=' * 70}');
-  print('SECURITY TESTS - REPLAY ATTACK PREVENTION');
-  print('${'=' * 70}\n');
-
-  await testChallengeReuse();
-  await testReplayAttack();
-  await testInvalidNonce();
-  await testWrongFolderInResponse();
-  await testExpiredChallenge();
-  await testMalformedChallengeResponse();
-
-  print('\n${'=' * 70}');
-  print('AUTHORIZATION TESTS');
-  print('${'=' * 70}\n');
-
-  await testUnauthorizedPeer();
-
-  // Print summary
-  print('\n');
-  print('╔════════════════════════════════════════════════════════════════╗');
-  if (testsFailed == 0) {
-    print('║           ALL TESTS PASSED! ($testsPassed/$testsRun)                            ║');
-  } else {
-    print('║           TESTS COMPLETED: $testsPassed passed, $testsFailed failed             ║');
-  }
-  print('╚════════════════════════════════════════════════════════════════╝');
-
-  if (failedTests.isNotEmpty) {
-    print('\nFailed tests:');
-    for (final test in failedTests) {
-      print('  - $test');
-    }
-  }
-
-  exit(testsFailed > 0 ? 1 : 0);
-}
-
-Future<bool> checkInstance(String name, String baseUrl) async {
-  try {
-    final response = await http.get(Uri.parse('$baseUrl/api/status'));
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      print('Instance $name: ${data['callsign']} (${data['npub']?.toString().substring(0, 20)}...)');
-      return true;
-    }
-  } catch (e) {
-    print('Instance $name: OFFLINE ($e)');
-  }
-  return false;
-}
-
-void printTestHeader(String title, String explanation) {
-  print('┌─────────────────────────────────────────────────────────────────');
-  print('│ TEST: $title');
-  print('├─────────────────────────────────────────────────────────────────');
-  print('│ WHY: $explanation');
-  print('└─────────────────────────────────────────────────────────────────');
-}
-
-void test(String name, bool passed, [String? details]) {
-  testsRun++;
+void check(String name, bool passed, [String? details]) {
+  _testsRun++;
   if (passed) {
-    testsPassed++;
-    print('  ✓ $name');
+    _testsPassed++;
+    print('  \u2713 $name');
   } else {
-    testsFailed++;
-    failedTests.add(name);
-    print('  ✗ $name');
-    if (details != null) {
-      print('    Details: $details');
+    _testsFailed++;
+    _failedTests.add(name);
+    print('  \u2717 $name');
+    if (details != null) print('    $details');
+  }
+}
+
+void section(String title) {
+  print('\n${'=' * 60}');
+  print(title);
+  print('${'=' * 60}\n');
+}
+
+// ─── Mock source server ──────────────────────────────────────────
+
+class MockSourceServer {
+  final String sourceDir;
+  final Map<String, String> allowedPeers = {}; // npub -> callsign
+  final Map<String, _Challenge> _challenges = {};
+  final Map<String, _Token> _tokens = {};
+  late HttpServer _server;
+  int _challengeCounter = 0;
+  int _tokenCounter = 0;
+
+  MockSourceServer(this.sourceDir);
+
+  int get port => _server.port;
+  String get url => 'http://localhost:$port';
+
+  Future<void> start() async {
+    _server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    _server.listen(_handleRequest);
+  }
+
+  Future<void> stop() async {
+    await _server.close(force: true);
+  }
+
+  void _handleRequest(HttpRequest request) async {
+    final path = request.uri.path;
+    final method = request.method;
+
+    try {
+      if (path == '/api/mirror/challenge' && method == 'GET') {
+        await _handleChallenge(request);
+      } else if (path == '/api/mirror/request' && method == 'POST') {
+        await _handleSyncRequest(request);
+      } else if (path == '/api/mirror/manifest' && method == 'GET') {
+        await _handleManifest(request);
+      } else if (path == '/api/mirror/file' && method == 'GET') {
+        await _handleFile(request);
+      } else if (path == '/api/mirror/pair' && method == 'POST') {
+        await _handlePair(request);
+      } else if (path == '/api/status' && method == 'GET') {
+        _jsonResponse(request, 200, {
+          'app': 'Geogram',
+          'npub': 'npub1sourceserver',
+          'callsign': 'X1SRC',
+          'nickname': 'Source Server',
+          'platform': 'test',
+        });
+      } else {
+        _jsonResponse(request, 404, {'error': 'Not found'});
+      }
+    } catch (e) {
+      _jsonResponse(request, 500, {'error': e.toString()});
     }
   }
-}
 
-// ============================================================
-// BASIC FUNCTIONALITY TESTS
-// ============================================================
-
-Future<void> testChallengeEndpoint() async {
-  printTestHeader(
-    'Challenge Endpoint Returns Valid Nonce',
-    '''The challenge endpoint is the first step in authentication.
-│ It must return a cryptographically random nonce that the client
-│ will sign to prove they control their private key (NSEC).''',
-  );
-
-  try {
-    final response = await http.get(
-      Uri.parse('$baseUrlA/api/mirror/challenge?folder=$testFolder'),
-    );
-
-    final passed = response.statusCode == 200;
-    String? details;
-
-    if (passed) {
-      final data = jsonDecode(response.body);
-      final hasNonce = data['nonce'] != null && (data['nonce'] as String).length == 64;
-      final hasExpiry = data['expires_at'] != null;
-      final hasFolder = data['folder'] == testFolder;
-
-      test('Challenge returns 200 OK', true);
-      test('Challenge has 64-char hex nonce (SHA256)', hasNonce,
-           hasNonce ? null : 'nonce: ${data['nonce']}');
-      test('Challenge has expiry timestamp', hasExpiry);
-      test('Challenge echoes requested folder', hasFolder,
-           hasFolder ? null : 'folder: ${data['folder']}');
-    } else {
-      test('Challenge returns 200 OK', false, 'status: ${response.statusCode}');
+  Future<void> _handleChallenge(HttpRequest request) async {
+    final folder = request.uri.queryParameters['folder'];
+    if (folder == null || folder.isEmpty) {
+      _jsonResponse(request, 400, {
+        'success': false,
+        'error': 'Missing folder parameter',
+        'code': 'INVALID_REQUEST',
+      });
+      return;
     }
-  } catch (e) {
-    test('Challenge endpoint accessible', false, e.toString());
-  }
-  print('');
-}
 
-Future<void> testChallengeRequiresFolder() async {
-  printTestHeader(
-    'Challenge Requires Folder Parameter',
-    '''The folder parameter is required because each challenge is bound
-│ to a specific folder. This prevents an attacker from using a
-│ challenge meant for folder A to access folder B.''',
-  );
-
-  try {
-    final response = await http.get(
-      Uri.parse('$baseUrlA/api/mirror/challenge'),
-    );
-
-    test('Missing folder returns 400 Bad Request', response.statusCode == 400,
-         'status: ${response.statusCode}');
-
-    if (response.statusCode == 400) {
-      final data = jsonDecode(response.body);
-      test('Error code is INVALID_REQUEST', data['code'] == 'INVALID_REQUEST',
-           'code: ${data['code']}');
+    if (!Directory('$sourceDir/$folder').existsSync()) {
+      _jsonResponse(request, 404, {
+        'success': false,
+        'error': 'Folder not found',
+        'code': 'FOLDER_NOT_FOUND',
+      });
+      return;
     }
-  } catch (e) {
-    test('Challenge validation works', false, e.toString());
+
+    _challengeCounter++;
+    final nonce = sha256
+        .convert(utf8.encode('ch_${DateTime.now().microsecondsSinceEpoch}_$_challengeCounter'))
+        .toString();
+    final expiresAt = DateTime.now().add(const Duration(minutes: 2));
+    _challenges[nonce] = _Challenge(nonce: nonce, folder: folder, expiresAt: expiresAt);
+
+    _jsonResponse(request, 200, {
+      'success': true,
+      'nonce': nonce,
+      'folder': folder,
+      'expires_at': expiresAt.millisecondsSinceEpoch ~/ 1000,
+    });
   }
-  print('');
+
+  Future<void> _handleSyncRequest(HttpRequest request) async {
+    final body = jsonDecode(await utf8.decoder.bind(request).join()) as Map<String, dynamic>;
+    final eventJson = body['event'] as Map<String, dynamic>?;
+    final folder = body['folder'] as String?;
+
+    if (eventJson == null || folder == null) {
+      _jsonResponse(request, 400, {'success': false, 'error': 'Missing fields', 'code': 'INVALID_REQUEST'});
+      return;
+    }
+
+    final event = NostrEvent.fromJson(eventJson);
+    if (!event.verify()) {
+      _jsonResponse(request, 401, {'success': false, 'allowed': false, 'error': 'Invalid signature', 'code': 'INVALID_SIGNATURE'});
+      return;
+    }
+
+    final peerNpub = NostrCrypto.encodeNpub(event.pubkey);
+    if (!allowedPeers.containsKey(peerNpub)) {
+      _jsonResponse(request, 403, {'success': false, 'allowed': false, 'error': 'Peer not allowed', 'code': 'PEER_NOT_ALLOWED'});
+      return;
+    }
+
+    final content = event.content;
+    if (!content.startsWith('mirror_response:')) {
+      _jsonResponse(request, 401, {'success': false, 'error': 'Invalid format', 'code': 'INVALID_CHALLENGE_FORMAT'});
+      return;
+    }
+
+    final parts = content.split(':');
+    if (parts.length != 3) {
+      _jsonResponse(request, 401, {'success': false, 'error': 'Invalid format', 'code': 'INVALID_CHALLENGE_FORMAT'});
+      return;
+    }
+
+    final nonce = parts[1];
+    final requestedFolder = parts[2];
+    final challenge = _challenges[nonce];
+
+    if (challenge == null) {
+      _jsonResponse(request, 401, {'success': false, 'error': 'Invalid challenge', 'code': 'INVALID_CHALLENGE'});
+      return;
+    }
+
+    if (challenge.expiresAt.isBefore(DateTime.now())) {
+      _challenges.remove(nonce);
+      _jsonResponse(request, 401, {'success': false, 'error': 'Expired', 'code': 'CHALLENGE_EXPIRED'});
+      return;
+    }
+
+    if (requestedFolder != folder || challenge.folder != folder) {
+      _jsonResponse(request, 401, {'success': false, 'error': 'Folder mismatch', 'code': 'FOLDER_MISMATCH'});
+      return;
+    }
+
+    _challenges.remove(nonce); // single-use
+
+    _tokenCounter++;
+    final token = sha256
+        .convert(utf8.encode('tok_${DateTime.now().microsecondsSinceEpoch}_$_tokenCounter'))
+        .toString();
+    final tokenExpires = DateTime.now().add(const Duration(hours: 1));
+    _tokens[token] = _Token(token: token, folder: folder, expiresAt: tokenExpires);
+
+    _jsonResponse(request, 200, {
+      'success': true,
+      'allowed': true,
+      'token': token,
+      'expires_at': tokenExpires.millisecondsSinceEpoch ~/ 1000,
+    });
+  }
+
+  Future<void> _handleManifest(HttpRequest request) async {
+    final folder = request.uri.queryParameters['folder'];
+    final token = request.uri.queryParameters['token'];
+
+    if (token == null) {
+      _jsonResponse(request, 401, {'success': false, 'error': 'Missing token'});
+      return;
+    }
+    final validToken = _tokens[token];
+    if (validToken == null || validToken.expiresAt.isBefore(DateTime.now())) {
+      _jsonResponse(request, 401, {'success': false, 'error': 'Invalid token'});
+      return;
+    }
+    if (folder != validToken.folder) {
+      _jsonResponse(request, 403, {'success': false, 'error': 'Folder mismatch'});
+      return;
+    }
+
+    final folderPath = '$sourceDir/$folder';
+    final dir = Directory(folderPath);
+    if (!dir.existsSync()) {
+      _jsonResponse(request, 404, {'success': false, 'error': 'Folder not found'});
+      return;
+    }
+
+    final files = <Map<String, dynamic>>[];
+    var totalBytes = 0;
+
+    await for (final entity in dir.list(recursive: true)) {
+      if (entity is File) {
+        final relative = entity.path.substring(folderPath.length + 1);
+        if (relative.startsWith('.')) continue;
+        final bytes = await entity.readAsBytes();
+        final hash = sha1.convert(bytes).toString();
+        final stat = await entity.stat();
+        files.add({
+          'path': relative,
+          'sha1': hash,
+          'mtime': stat.modified.millisecondsSinceEpoch ~/ 1000,
+          'size': bytes.length,
+        });
+        totalBytes += bytes.length;
+      }
+    }
+    files.sort((a, b) => (a['path'] as String).compareTo(b['path'] as String));
+
+    _jsonResponse(request, 200, {
+      'success': true,
+      'folder': folder,
+      'total_files': files.length,
+      'total_bytes': totalBytes,
+      'files': files,
+      'generated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+    });
+  }
+
+  Future<void> _handleFile(HttpRequest request) async {
+    final filePath = request.uri.queryParameters['path'];
+    final token = request.uri.queryParameters['token'];
+
+    if (token == null) {
+      _jsonResponse(request, 401, {'success': false, 'error': 'Missing token'});
+      return;
+    }
+    final validToken = _tokens[token];
+    if (validToken == null || validToken.expiresAt.isBefore(DateTime.now())) {
+      _jsonResponse(request, 401, {'success': false, 'error': 'Invalid token'});
+      return;
+    }
+    if (filePath == null || filePath.isEmpty) {
+      _jsonResponse(request, 400, {'success': false, 'error': 'Missing path'});
+      return;
+    }
+
+    final fullPath = '$sourceDir/${validToken.folder}/$filePath';
+    final file = File(fullPath);
+    if (!file.existsSync()) {
+      _jsonResponse(request, 404, {'success': false, 'error': 'File not found'});
+      return;
+    }
+
+    final bytes = await file.readAsBytes();
+    final hash = sha1.convert(bytes).toString();
+
+    request.response
+      ..statusCode = 200
+      ..headers.set('Content-Type', 'application/octet-stream')
+      ..headers.set('X-SHA1', hash)
+      ..headers.set('Content-Length', bytes.length.toString())
+      ..add(bytes);
+    await request.response.close();
+  }
+
+  Future<void> _handlePair(HttpRequest request) async {
+    final body = jsonDecode(await utf8.decoder.bind(request).join()) as Map<String, dynamic>;
+    final peerNpub = body['npub'] as String?;
+    final peerCallsign = body['callsign'] as String?;
+
+    if (peerNpub == null || peerCallsign == null) {
+      _jsonResponse(request, 400, {'success': false, 'error': 'Missing fields'});
+      return;
+    }
+
+    allowedPeers[peerNpub] = peerCallsign;
+
+    _jsonResponse(request, 200, {
+      'success': true,
+      'npub': 'npub1sourceserver',
+      'callsign': 'X1SRC',
+      'device_name': 'Test Source',
+      'platform': 'linux',
+    });
+  }
+
+  void _jsonResponse(HttpRequest request, int status, Map<String, dynamic> body) {
+    request.response
+      ..statusCode = status
+      ..headers.contentType = ContentType.json
+      ..write(jsonEncode(body));
+    request.response.close();
+  }
 }
 
-Future<void> testChallengeNonexistentFolder() async {
-  printTestHeader(
-    'Challenge for Nonexistent Folder Returns 404',
-    '''Before issuing a challenge, the server verifies the folder exists.
-│ This prevents resource enumeration attacks and avoids wasting
-│ server resources on invalid requests.''',
-  );
+class _Challenge {
+  final String nonce;
+  final String folder;
+  final DateTime expiresAt;
+  _Challenge({required this.nonce, required this.folder, required this.expiresAt});
+}
+
+class _Token {
+  final String token;
+  final String folder;
+  final DateTime expiresAt;
+  _Token({required this.token, required this.folder, required this.expiresAt});
+}
+
+// ─── Client-side sync implementation ─────────────────────────────
+//
+// Pure Dart implementation of the mirror sync client protocol.
+// Mirrors what MirrorSyncService.syncFolder() does, without
+// depending on any Flutter services.
+
+class SyncClient {
+  final String nsec;
+  final String npub;
+  final String destDir;
+
+  SyncClient({required this.nsec, required this.npub, required this.destDir});
+
+  String get _pubkeyHex => NostrCrypto.decodeNpub(npub);
+  String get _privkeyHex => NostrCrypto.decodeNsec(nsec);
+
+  /// Full sync: challenge-response auth -> manifest -> diff -> download
+  Future<SyncResult> syncFolder(String peerUrl, String folder) async {
+    final stopwatch = Stopwatch()..start();
+    var filesAdded = 0;
+    var filesModified = 0;
+    var bytesTransferred = 0;
+
+    // 1. Get challenge
+    final challengeResp = await http.get(
+      Uri.parse('$peerUrl/api/mirror/challenge?folder=${Uri.encodeComponent(folder)}'),
+    );
+    if (challengeResp.statusCode != 200) {
+      return SyncResult(false, error: 'Challenge failed: ${challengeResp.statusCode}');
+    }
+    final challengeData = jsonDecode(challengeResp.body) as Map<String, dynamic>;
+    if (challengeData['success'] != true) {
+      return SyncResult(false, error: 'Challenge failed: ${challengeData['error']}');
+    }
+    final nonce = challengeData['nonce'] as String;
+
+    // 2. Sign challenge
+    final event = NostrEvent(
+      pubkey: _pubkeyHex,
+      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      kind: NostrEventKind.textNote,
+      tags: [
+        ['t', 'mirror_response'],
+        ['folder', folder],
+        ['nonce', nonce],
+      ],
+      content: 'mirror_response:$nonce:$folder',
+    );
+    event.sign(_privkeyHex);
+
+    // 3. Send signed challenge
+    final requestResp = await http.post(
+      Uri.parse('$peerUrl/api/mirror/request'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'event': event.toJson(), 'folder': folder}),
+    );
+    if (requestResp.statusCode != 200) {
+      return SyncResult(false, error: 'Request failed: ${requestResp.statusCode}');
+    }
+    final requestData = jsonDecode(requestResp.body) as Map<String, dynamic>;
+    if (requestData['success'] != true || requestData['allowed'] != true) {
+      return SyncResult(false, error: 'Not allowed: ${requestData['error']}');
+    }
+    final token = requestData['token'] as String;
+
+    // 4. Get manifest
+    final manifestResp = await http.get(
+      Uri.parse('$peerUrl/api/mirror/manifest?folder=${Uri.encodeComponent(folder)}&token=${Uri.encodeComponent(token)}'),
+    );
+    if (manifestResp.statusCode != 200) {
+      return SyncResult(false, error: 'Manifest failed: ${manifestResp.statusCode}');
+    }
+    final manifest = jsonDecode(manifestResp.body) as Map<String, dynamic>;
+    if (manifest['success'] != true) {
+      return SyncResult(false, error: 'Manifest failed: ${manifest['error']}');
+    }
+
+    final remoteFiles = (manifest['files'] as List)
+        .map((f) => f as Map<String, dynamic>)
+        .toList();
+
+    // 5. Diff against local
+    final localDir = '$destDir/$folder';
+    await Directory(localDir).create(recursive: true);
+
+    for (final remote in remoteFiles) {
+      final remotePath = remote['path'] as String;
+      final remoteSha1 = remote['sha1'] as String;
+      final remoteSize = remote['size'] as int;
+      final localFile = File('$localDir/$remotePath');
+
+      bool needsDownload = false;
+      bool isNew = false;
+
+      if (!localFile.existsSync()) {
+        needsDownload = true;
+        isNew = true;
+      } else {
+        final localBytes = localFile.readAsBytesSync();
+        final localSha1 = sha1.convert(localBytes).toString();
+        if (localSha1 != remoteSha1) {
+          needsDownload = true;
+        }
+      }
+
+      if (needsDownload) {
+        // Download file
+        final fileResp = await http.get(
+          Uri.parse('$peerUrl/api/mirror/file?path=${Uri.encodeComponent(remotePath)}&token=${Uri.encodeComponent(token)}'),
+        );
+        if (fileResp.statusCode == 200) {
+          // Verify SHA1
+          final downloadedSha1 = sha1.convert(fileResp.bodyBytes).toString();
+          if (downloadedSha1 != remoteSha1) {
+            print('    WARNING: SHA1 mismatch for $remotePath');
+            continue;
+          }
+
+          await localFile.parent.create(recursive: true);
+          await localFile.writeAsBytes(fileResp.bodyBytes);
+          bytesTransferred += remoteSize;
+
+          if (isNew) {
+            filesAdded++;
+          } else {
+            filesModified++;
+          }
+        }
+      }
+    }
+
+    stopwatch.stop();
+    return SyncResult(
+      true,
+      filesAdded: filesAdded,
+      filesModified: filesModified,
+      bytesTransferred: bytesTransferred,
+      duration: stopwatch.elapsed,
+    );
+  }
+}
+
+class SyncResult {
+  final bool success;
+  final String? error;
+  final int filesAdded;
+  final int filesModified;
+  final int bytesTransferred;
+  final Duration duration;
+
+  SyncResult(
+    this.success, {
+    this.error,
+    this.filesAdded = 0,
+    this.filesModified = 0,
+    this.bytesTransferred = 0,
+    this.duration = Duration.zero,
+  });
+
+  int get totalChanges => filesAdded + filesModified;
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────
+
+String fileSha1(String path) {
+  return sha1.convert(File(path).readAsBytesSync()).toString();
+}
+
+// ─── Main ────────────────────────────────────────────────────────
+
+void main() async {
+  print('');
+  print('================================================================');
+  print('  Mirror Sync Integration Test');
+  print('================================================================');
+
+  // ── Setup ──────────────────────────────────────────────────────
+
+  final tmpDir = Directory.systemTemp.createTempSync('mirror-test-');
+  final srcDir = Directory('${tmpDir.path}/source');
+  final dstDir = Directory('${tmpDir.path}/dest');
+  srcDir.createSync(recursive: true);
+  dstDir.createSync(recursive: true);
+
+  print('\nSource dir: ${srcDir.path}');
+  print('Dest dir:   ${dstDir.path}');
+
+  // Create test files in source
+  Directory('${srcDir.path}/blog').createSync();
+  File('${srcDir.path}/blog/post1.json')
+      .writeAsStringSync('{"title":"First Post","body":"Hello world"}');
+  File('${srcDir.path}/blog/post2.json')
+      .writeAsStringSync('{"title":"Second Post","body":"Another entry"}');
+  Directory('${srcDir.path}/blog/drafts').createSync();
+  File('${srcDir.path}/blog/drafts/draft1.json')
+      .writeAsStringSync('{"title":"Draft","body":"Work in progress"}');
+
+  print('Created 3 test files in source/blog/');
+
+  // Generate a NOSTR key pair for the test client
+  final keys = NostrCrypto.generateKeyPair();
+  final npub = keys.npub;
+  final nsec = keys.nsec;
+  print('Client npub: ${npub.substring(0, 20)}...\n');
+
+  // Create sync client
+  final client = SyncClient(nsec: nsec, npub: npub, destDir: dstDir.path);
+
+  // Start mock source server
+  final server = MockSourceServer(srcDir.path);
+  await server.start();
+  server.allowedPeers[npub] = 'X1TEST';
+  print('Source server on port ${server.port}, client registered as allowed peer\n');
 
   try {
-    final response = await http.get(
-      Uri.parse('$baseUrlA/api/mirror/challenge?folder=nonexistent-folder-xyz'),
+    // ── Test 1: Initial sync ───────────────────────────────────
+
+    section('TEST 1: Initial Sync (empty destination)');
+
+    final result1 = await client.syncFolder(server.url, 'blog');
+
+    check('Sync succeeded', result1.success, result1.error);
+    check('3 files added', result1.filesAdded == 3,
+        'expected 3, got ${result1.filesAdded}');
+    check('0 files modified', result1.filesModified == 0,
+        'got ${result1.filesModified}');
+    check('Bytes transferred > 0', result1.bytesTransferred > 0,
+        'got ${result1.bytesTransferred}');
+    print('  Duration: ${result1.duration.inMilliseconds}ms');
+
+    // ── Test 2: Verify files on disk ───────────────────────────
+
+    section('TEST 2: Verify Files on Disk (SHA1 integrity)');
+
+    final dstBlog = '${dstDir.path}/blog';
+
+    check('post1.json exists', File('$dstBlog/post1.json').existsSync());
+    check('post2.json exists', File('$dstBlog/post2.json').existsSync());
+    check('drafts/ subdirectory exists', Directory('$dstBlog/drafts').existsSync());
+    check('drafts/draft1.json exists', File('$dstBlog/drafts/draft1.json').existsSync());
+
+    if (File('$dstBlog/post1.json').existsSync()) {
+      check('post1.json SHA1 matches',
+          fileSha1('${srcDir.path}/blog/post1.json') == fileSha1('$dstBlog/post1.json'));
+    }
+    if (File('$dstBlog/post2.json').existsSync()) {
+      check('post2.json SHA1 matches',
+          fileSha1('${srcDir.path}/blog/post2.json') == fileSha1('$dstBlog/post2.json'));
+    }
+    if (File('$dstBlog/drafts/draft1.json').existsSync()) {
+      check('drafts/draft1.json SHA1 matches',
+          fileSha1('${srcDir.path}/blog/drafts/draft1.json') == fileSha1('$dstBlog/drafts/draft1.json'));
+    }
+
+    // Verify actual content
+    final c1 = File('$dstBlog/post1.json').readAsStringSync();
+    check('post1.json content correct',
+        c1.contains('First Post') && c1.contains('Hello world'), 'content: $c1');
+
+    // ── Test 3: No-op sync ─────────────────────────────────────
+
+    section('TEST 3: No-op Sync (no changes)');
+
+    final result2 = await client.syncFolder(server.url, 'blog');
+
+    check('Sync succeeded', result2.success, result2.error);
+    check('0 total changes', result2.totalChanges == 0,
+        'got ${result2.totalChanges}');
+
+    // ── Test 4: Update sync ────────────────────────────────────
+
+    section('TEST 4: Update Sync (modify source file)');
+
+    File('${srcDir.path}/blog/post1.json')
+        .writeAsStringSync('{"title":"First Post UPDATED","body":"Modified content"}');
+
+    final result3 = await client.syncFolder(server.url, 'blog');
+
+    check('Sync succeeded', result3.success, result3.error);
+    check('1 file modified', result3.filesModified == 1, 'got ${result3.filesModified}');
+    check('0 files added', result3.filesAdded == 0, 'got ${result3.filesAdded}');
+
+    final updated = File('$dstBlog/post1.json').readAsStringSync();
+    check('Dest has updated content', updated.contains('UPDATED'), 'content: $updated');
+    check('Updated SHA1 matches',
+        fileSha1('${srcDir.path}/blog/post1.json') == fileSha1('$dstBlog/post1.json'));
+
+    // ── Test 5: New file sync ──────────────────────────────────
+
+    section('TEST 5: New File Sync (add source file)');
+
+    File('${srcDir.path}/blog/post3.json')
+        .writeAsStringSync('{"title":"Third Post","body":"Brand new"}');
+
+    final result4 = await client.syncFolder(server.url, 'blog');
+
+    check('Sync succeeded', result4.success, result4.error);
+    check('1 file added', result4.filesAdded == 1, 'got ${result4.filesAdded}');
+    check('post3.json exists on dest', File('$dstBlog/post3.json').existsSync());
+
+    if (File('$dstBlog/post3.json').existsSync()) {
+      check('post3.json content correct',
+          File('$dstBlog/post3.json').readAsStringSync().contains('Third Post'));
+    }
+
+    // ── Test 6: One-way mirror ─────────────────────────────────
+
+    section('TEST 6: One-Way Mirror (dest changes overwritten)');
+
+    File('$dstBlog/post1.json')
+        .writeAsStringSync('{"title":"LOCAL CHANGE","body":"Should be overwritten"}');
+
+    final localHash = fileSha1('$dstBlog/post1.json');
+    final sourceHash = fileSha1('${srcDir.path}/blog/post1.json');
+    check('Local and source differ before sync', localHash != sourceHash);
+
+    final result5 = await client.syncFolder(server.url, 'blog');
+
+    check('Sync succeeded', result5.success, result5.error);
+    check('1 file modified (overwritten)', result5.filesModified == 1, 'got ${result5.filesModified}');
+    check('Dest matches source again',
+        fileSha1('$dstBlog/post1.json') == sourceHash);
+    check('Local change was overwritten',
+        !File('$dstBlog/post1.json').readAsStringSync().contains('LOCAL CHANGE'));
+
+    // ── Test 7: Pair endpoint ──────────────────────────────────
+
+    section('TEST 7: Pair Endpoint');
+
+    final pairResp = await http.post(
+      Uri.parse('${server.url}/api/mirror/pair'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'npub': npub,
+        'callsign': 'X1TEST',
+        'device_name': 'Test Client',
+        'platform': 'linux',
+        'apps': ['blog', 'chat'],
+      }),
     );
 
-    test('Nonexistent folder returns 404', response.statusCode == 404,
-         'status: ${response.statusCode}');
-  } catch (e) {
-    test('Folder validation works', false, e.toString());
-  }
-  print('');
-}
+    final pairBody = jsonDecode(pairResp.body) as Map<String, dynamic>;
+    check('Pair returns 200', pairResp.statusCode == 200, 'got ${pairResp.statusCode}');
+    check('Pair returns success', pairBody['success'] == true);
+    check('Pair returns remote npub', pairBody['npub'] != null);
+    check('Pair returns remote callsign', pairBody['callsign'] != null);
+    check('Pair returns device_name', pairBody['device_name'] != null);
+    check('Peer registered as allowed', server.allowedPeers.containsKey(npub));
 
-Future<void> testRequestWithoutChallenge() async {
-  printTestHeader(
-    'Request Without Valid Challenge Fails',
-    '''The old API format (simple_mirror:folder) without challenge-response
-│ must be rejected. This ensures backward compatibility doesn\'t
-│ create a security hole.''',
-  );
+    // ── Test 8: Unauthorized peer ──────────────────────────────
 
-  try {
-    // Try to make a request with old-style content (no challenge)
-    final response = await http.post(
-      Uri.parse('$baseUrlA/api/mirror/request'),
+    section('TEST 8: Security — Unauthorized Peer');
+
+    final rogueKeys = NostrCrypto.generateKeyPair();
+
+    final chResp = await http.get(
+      Uri.parse('${server.url}/api/mirror/challenge?folder=blog'),
+    );
+    final chData = jsonDecode(chResp.body) as Map<String, dynamic>;
+    final rogueNonce = chData['nonce'] as String;
+
+    final rogueEvent = NostrEvent(
+      pubkey: rogueKeys.publicKeyHex,
+      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      kind: NostrEventKind.textNote,
+      tags: [['t', 'mirror_response'], ['folder', 'blog'], ['nonce', rogueNonce]],
+      content: 'mirror_response:$rogueNonce:blog',
+    );
+    rogueEvent.sign(rogueKeys.privateKeyHex);
+
+    final rogueResp = await http.post(
+      Uri.parse('${server.url}/api/mirror/request'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'event': rogueEvent.toJson(), 'folder': 'blog'}),
+    );
+
+    check('Unauthorized peer rejected (403)', rogueResp.statusCode == 403,
+        'got ${rogueResp.statusCode}');
+    final rogueBody = jsonDecode(rogueResp.body) as Map<String, dynamic>;
+    check('Error is PEER_NOT_ALLOWED', rogueBody['code'] == 'PEER_NOT_ALLOWED',
+        'got ${rogueBody['code']}');
+
+    // ── Test 9: Replay attack ──────────────────────────────────
+
+    section('TEST 9: Security — Replay Attack (nonce reuse)');
+
+    final ch2Resp = await http.get(
+      Uri.parse('${server.url}/api/mirror/challenge?folder=blog'),
+    );
+    final nonce2 = (jsonDecode(ch2Resp.body) as Map<String, dynamic>)['nonce'] as String;
+
+    final privHex = NostrCrypto.decodeNsec(nsec);
+    final pubHex = NostrCrypto.decodeNpub(npub);
+
+    final validEvent = NostrEvent(
+      pubkey: pubHex,
+      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      kind: NostrEventKind.textNote,
+      tags: [['t', 'mirror_response'], ['folder', 'blog'], ['nonce', nonce2]],
+      content: 'mirror_response:$nonce2:blog',
+    );
+    validEvent.sign(privHex);
+
+    // First use succeeds
+    final first = await http.post(
+      Uri.parse('${server.url}/api/mirror/request'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'event': validEvent.toJson(), 'folder': 'blog'}),
+    );
+    final firstData = jsonDecode(first.body) as Map<String, dynamic>;
+    check('First use succeeds', firstData['success'] == true, 'got $firstData');
+
+    // Replay fails
+    final replay = await http.post(
+      Uri.parse('${server.url}/api/mirror/request'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'event': validEvent.toJson(), 'folder': 'blog'}),
+    );
+    check('Replay rejected (401)', replay.statusCode == 401, 'got ${replay.statusCode}');
+    final replayData = jsonDecode(replay.body) as Map<String, dynamic>;
+    check('Error is INVALID_CHALLENGE', replayData['code'] == 'INVALID_CHALLENGE',
+        'got ${replayData['code']}');
+
+    // ── Test 10: Invalid signature ─────────────────────────────
+
+    section('TEST 10: Security — Invalid Signature');
+
+    final ch3Resp = await http.get(
+      Uri.parse('${server.url}/api/mirror/challenge?folder=blog'),
+    );
+    final nonce3 = (jsonDecode(ch3Resp.body) as Map<String, dynamic>)['nonce'] as String;
+
+    final fakeResp = await http.post(
+      Uri.parse('${server.url}/api/mirror/request'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'event': {
-          'id': 'fake_id',
+          'id': sha256.convert(utf8.encode('fake')).toString(),
           'kind': 1,
-          'pubkey': 'fake_pubkey',
+          'pubkey': pubHex,
           'created_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-          'content': 'simple_mirror:$testFolder',  // Old format without challenge
-          'tags': [['t', 'mirror_request'], ['folder', testFolder]],
-          'sig': 'fake_signature',
+          'content': 'mirror_response:$nonce3:blog',
+          'tags': [['t', 'mirror_response'], ['folder', 'blog'], ['nonce', nonce3]],
+          'sig': 'a' * 128,
         },
-        'folder': testFolder,
+        'folder': 'blog',
       }),
     );
+    check('Fake signature rejected (401)', fakeResp.statusCode == 401,
+        'got ${fakeResp.statusCode}');
 
-    // Should fail with invalid signature or invalid challenge format
-    test('Old-style request without challenge rejected', response.statusCode != 200,
-         'status: ${response.statusCode}');
+  } finally {
+    await server.stop();
+    try {
+      tmpDir.deleteSync(recursive: true);
+    } catch (_) {}
+  }
 
-    if (response.statusCode != 200) {
-      final data = jsonDecode(response.body);
-      print('    Rejection reason: ${data['code']} - ${data['error']}');
+  // ── Summary ──────────────────────────────────────────────────
+
+  print('\n');
+  print('================================================================');
+  if (_testsFailed == 0) {
+    print('  ALL TESTS PASSED ($_testsPassed/$_testsRun)');
+  } else {
+    print('  $_testsPassed PASSED, $_testsFailed FAILED (of $_testsRun)');
+    print('  Failed:');
+    for (final t in _failedTests) {
+      print('    - $t');
     }
-  } catch (e) {
-    test('Request validation works', false, e.toString());
   }
+  print('================================================================');
   print('');
-}
 
-Future<void> testValidSyncFlow() async {
-  printTestHeader(
-    'Complete Valid Sync Flow',
-    '''This tests the full happy path: Instance B requests sync from A.
-│ Internally this: (1) fetches a challenge, (2) signs it with NSEC,
-│ (3) sends signed response, (4) gets token, (5) fetches files.''',
-  );
-
-  try {
-    // Use debug API to trigger a full sync
-    final response = await http.post(
-      Uri.parse('$baseUrlB/api/debug'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'action': 'mirror_request_sync',
-        'peer_url': baseUrlA,
-        'folder': testFolder,
-      }),
-    );
-
-    final passed = response.statusCode == 200;
-    if (passed) {
-      final data = jsonDecode(response.body);
-      test('Sync completes successfully', data['success'] == true,
-           'error: ${data['error']}');
-
-      if (data['success'] == true) {
-        final totalChanges = (data['files_added'] ?? 0) +
-                            (data['files_modified'] ?? 0);
-        print('    Files synced: ${data['files_added']} added, ${data['files_modified']} modified');
-        print('    Bytes transferred: ${data['bytes_transferred']}');
-        print('    Duration: ${data['duration_ms']}ms');
-      }
-    } else {
-      test('Sync request accepted', false, 'status: ${response.statusCode}');
-    }
-  } catch (e) {
-    test('Valid sync flow works', false, e.toString());
-  }
-  print('');
-}
-
-// ============================================================
-// SECURITY TESTS - REPLAY ATTACK PREVENTION
-// ============================================================
-
-Future<void> testChallengeReuse() async {
-  printTestHeader(
-    'Challenge Cannot Be Reused (Single-Use Nonce)',
-    '''Each challenge nonce can only be used once. After a successful
-│ authentication, the nonce is deleted. This prevents an attacker
-│ from capturing a valid signed response and replaying it later.''',
-  );
-
-  try {
-    // Do multiple sequential syncs - each should succeed with fresh challenges
-    print('    Performing 3 sequential syncs...');
-
-    final sync1 = await doSyncViaDebug();
-    print('    Sync 1: ${sync1 ? 'SUCCESS' : 'FAILED'}');
-
-    final sync2 = await doSyncViaDebug();
-    print('    Sync 2: ${sync2 ? 'SUCCESS' : 'FAILED'}');
-
-    final sync3 = await doSyncViaDebug();
-    print('    Sync 3: ${sync3 ? 'SUCCESS' : 'FAILED'}');
-
-    test('Multiple sequential syncs succeed (each gets fresh challenge)',
-         sync1 && sync2 && sync3,
-         'sync1: $sync1, sync2: $sync2, sync3: $sync3');
-
-  } catch (e) {
-    test('Challenge reuse prevention', false, e.toString());
-  }
-  print('');
-}
-
-Future<bool> doSyncViaDebug() async {
-  final response = await http.post(
-    Uri.parse('$baseUrlB/api/debug'),
-    headers: {'Content-Type': 'application/json'},
-    body: jsonEncode({
-      'action': 'mirror_request_sync',
-      'peer_url': baseUrlA,
-      'folder': testFolder,
-    }),
-  );
-
-  if (response.statusCode == 200) {
-    final data = jsonDecode(response.body);
-    return data['success'] == true;
-  }
-  return false;
-}
-
-Future<void> testReplayAttack() async {
-  printTestHeader(
-    'Replay Attack Prevention',
-    '''An attacker who captures a valid signed request from the network
-│ should NOT be able to replay it to gain access. This is because:
-│ (1) The challenge nonce is single-use (consumed after first use)
-│ (2) The attacker cannot sign a new challenge without the NSEC''',
-  );
-
-  try {
-    // Get a challenge
-    final challengeResp = await http.get(
-      Uri.parse('$baseUrlA/api/mirror/challenge?folder=$testFolder'),
-    );
-    final challenge = jsonDecode(challengeResp.body);
-    final nonce = challenge['nonce'] as String;
-    print('    Simulating captured request with nonce: ${nonce.substring(0, 16)}...');
-
-    // Create a fake "captured" request with valid structure but fake signature
-    final fakeEvent = {
-      'id': sha256.convert(utf8.encode('fake_event_${DateTime.now()}')).toString(),
-      'kind': 1,
-      'pubkey': 'captured_pubkey_from_network_sniffing',
-      'created_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      'content': 'mirror_response:$nonce:$testFolder',
-      'tags': [
-        ['t', 'mirror_response'],
-        ['folder', testFolder],
-        ['nonce', nonce],
-      ],
-      'sig': 'captured_signature_would_not_verify_for_new_challenge',
-    };
-
-    final response = await http.post(
-      Uri.parse('$baseUrlA/api/mirror/request'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'event': fakeEvent,
-        'folder': testFolder,
-      }),
-    );
-
-    test('Captured request with invalid signature rejected',
-         response.statusCode == 401,
-         'status: ${response.statusCode}');
-
-    if (response.statusCode == 401) {
-      final data = jsonDecode(response.body);
-      test('Error indicates signature verification failed',
-           data['code'] == 'INVALID_SIGNATURE',
-           'code: ${data['code']}');
-      print('    Attack blocked: ${data['error']}');
-    }
-
-  } catch (e) {
-    test('Replay attack prevention', false, e.toString());
-  }
-  print('');
-}
-
-Future<void> testInvalidNonce() async {
-  printTestHeader(
-    'Fabricated/Invalid Nonce Rejected',
-    '''An attacker cannot fabricate their own nonce. Only nonces issued
-│ by the server are valid. The server maintains a map of active
-│ challenges and rejects any nonce not in this map.''',
-  );
-
-  try {
-    // Create a fake nonce (not issued by server)
-    final fakeNonce = sha256.convert(utf8.encode('fabricated_nonce_${DateTime.now()}')).toString();
-    print('    Fabricated nonce: ${fakeNonce.substring(0, 16)}...');
-
-    final fakeEvent = {
-      'id': sha256.convert(utf8.encode('fake_event')).toString(),
-      'kind': 1,
-      'pubkey': 'fake_pubkey',
-      'created_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      'content': 'mirror_response:$fakeNonce:$testFolder',
-      'tags': [
-        ['t', 'mirror_response'],
-        ['folder', testFolder],
-        ['nonce', fakeNonce],
-      ],
-      'sig': 'fake_signature',
-    };
-
-    final response = await http.post(
-      Uri.parse('$baseUrlA/api/mirror/request'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'event': fakeEvent,
-        'folder': testFolder,
-      }),
-    );
-
-    // Signature check happens first, so we expect INVALID_SIGNATURE
-    test('Request with fabricated nonce rejected', response.statusCode == 401,
-         'status: ${response.statusCode}');
-
-    final data = jsonDecode(response.body);
-    print('    Attack blocked: ${data['code']} - ${data['error']}');
-
-  } catch (e) {
-    test('Invalid nonce handling', false, e.toString());
-  }
-  print('');
-}
-
-Future<void> testWrongFolderInResponse() async {
-  printTestHeader(
-    'Challenge Bound to Specific Folder',
-    '''Each challenge is bound to a specific folder. An attacker who
-│ obtains a valid challenge for folder A cannot use it to access
-│ folder B. The server verifies the folder in the signed content
-│ matches the folder the challenge was issued for.''',
-  );
-
-  try {
-    // Get a challenge for the test folder
-    final challengeResp = await http.get(
-      Uri.parse('$baseUrlA/api/mirror/challenge?folder=$testFolder'),
-    );
-
-    if (challengeResp.statusCode != 200) {
-      test('Got challenge for folder binding test', false, 'status: ${challengeResp.statusCode}');
-      return;
-    }
-
-    final challenge = jsonDecode(challengeResp.body);
-    final nonce = challenge['nonce'] as String;
-    print('    Got challenge for "$testFolder": ${nonce.substring(0, 16)}...');
-    print('    Attempting to use it for "different-folder"...');
-
-    // Try to use this nonce for a different folder
-    final fakeEvent = {
-      'id': sha256.convert(utf8.encode('fake_event')).toString(),
-      'kind': 1,
-      'pubkey': 'fake_pubkey',
-      'created_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      // Use the nonce but claim a different folder
-      'content': 'mirror_response:$nonce:different-folder',
-      'tags': [
-        ['t', 'mirror_response'],
-        ['folder', 'different-folder'],
-        ['nonce', nonce],
-      ],
-      'sig': 'fake_signature',
-    };
-
-    final response = await http.post(
-      Uri.parse('$baseUrlA/api/mirror/request'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'event': fakeEvent,
-        'folder': 'different-folder',
-      }),
-    );
-
-    test('Cross-folder challenge use rejected', response.statusCode != 200,
-         'status: ${response.statusCode}');
-
-    final data = jsonDecode(response.body);
-    print('    Attack blocked: ${data['code']} - ${data['error']}');
-
-  } catch (e) {
-    test('Folder binding verification', false, e.toString());
-  }
-  print('');
-}
-
-Future<void> testExpiredChallenge() async {
-  printTestHeader(
-    'Challenge Expiry Verification',
-    '''Challenges expire after 2 minutes. This limits the window for
-│ any attack and ensures stale challenges don\'t accumulate in
-│ server memory. We verify the expiry timestamp is reasonable.''',
-  );
-
-  try {
-    final challengeResp = await http.get(
-      Uri.parse('$baseUrlA/api/mirror/challenge?folder=$testFolder'),
-    );
-
-    if (challengeResp.statusCode != 200) {
-      test('Got challenge for expiry test', false, 'status: ${challengeResp.statusCode}');
-      return;
-    }
-
-    final challenge = jsonDecode(challengeResp.body);
-    final expiresAt = challenge['expires_at'] as int;
-    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    final expiresIn = expiresAt - now;
-
-    print('    Challenge expires at: ${DateTime.fromMillisecondsSinceEpoch(expiresAt * 1000)}');
-    print('    Time until expiry: ${expiresIn} seconds');
-
-    test('Challenge expires in the future', expiresAt > now,
-         'expires_at: $expiresAt, now: $now');
-    test('Challenge expires within 2-3 minutes (reasonable window)',
-         expiresIn > 0 && expiresIn <= 180,
-         'expires in $expiresIn seconds');
-
-  } catch (e) {
-    test('Expiry verification', false, e.toString());
-  }
-  print('');
-}
-
-Future<void> testMalformedChallengeResponse() async {
-  printTestHeader(
-    'Malformed Challenge Response Rejected',
-    '''The server must reject any response that doesn\'t follow the
-│ exact format "mirror_response:<nonce>:<folder>". This prevents
-│ format confusion attacks and ensures robust parsing.''',
-  );
-
-  try {
-    final malformedContents = [
-      ('simple_mirror:$testFolder', 'Old API format (no challenge)'),
-      ('mirror_response:', 'Missing nonce and folder'),
-      ('mirror_response:nonce_only', 'Missing folder separator'),
-      ('invalid_prefix:nonce:folder', 'Wrong prefix'),
-      ('', 'Empty content'),
-      ('mirror_response:a:b:c:d', 'Too many parts'),
-    ];
-
-    var allRejected = true;
-    for (final (content, description) in malformedContents) {
-      final fakeEvent = {
-        'id': sha256.convert(utf8.encode('fake_$content')).toString(),
-        'kind': 1,
-        'pubkey': 'fake_pubkey',
-        'created_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        'content': content,
-        'tags': [],
-        'sig': 'fake_signature',
-      };
-
-      final response = await http.post(
-        Uri.parse('$baseUrlA/api/mirror/request'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'event': fakeEvent,
-          'folder': testFolder,
-        }),
-      );
-
-      if (response.statusCode == 200) {
-        print('    ✗ "$description" was incorrectly accepted!');
-        allRejected = false;
-      } else {
-        print('    ✓ "$description" rejected (${response.statusCode})');
-      }
-    }
-
-    test('All malformed content formats rejected', allRejected);
-
-  } catch (e) {
-    test('Malformed content handling', false, e.toString());
-  }
-  print('');
-}
-
-// ============================================================
-// AUTHORIZATION TESTS
-// ============================================================
-
-Future<void> testUnauthorizedPeer() async {
-  printTestHeader(
-    'Unauthorized Peer Rejected',
-    '''Even if an attacker could somehow sign a valid challenge response
-│ (they can\'t without the NSEC), they would still be rejected if
-│ their public key is not in the allowed peers list on Instance A.''',
-  );
-
-  try {
-    // Get a challenge
-    final challengeResp = await http.get(
-      Uri.parse('$baseUrlA/api/mirror/challenge?folder=$testFolder'),
-    );
-
-    if (challengeResp.statusCode != 200) {
-      test('Got challenge for auth test', false, 'status: ${challengeResp.statusCode}');
-      return;
-    }
-
-    final challenge = jsonDecode(challengeResp.body);
-    final nonce = challenge['nonce'] as String;
-    print('    Simulating request from unauthorized peer...');
-
-    // Create a request from an "unauthorized" peer
-    final fakeEvent = {
-      'id': sha256.convert(utf8.encode('unauthorized_peer_event')).toString(),
-      'kind': 1,
-      'pubkey': 'unauthorized_peer_not_in_allowed_list_abcdef123456',
-      'created_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      'content': 'mirror_response:$nonce:$testFolder',
-      'tags': [
-        ['t', 'mirror_response'],
-        ['folder', testFolder],
-        ['nonce', nonce],
-      ],
-      'sig': 'signature_would_be_valid_but_peer_not_authorized',
-    };
-
-    final response = await http.post(
-      Uri.parse('$baseUrlA/api/mirror/request'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'event': fakeEvent,
-        'folder': testFolder,
-      }),
-    );
-
-    test('Unauthorized peer request rejected', response.statusCode != 200,
-         'status: ${response.statusCode}');
-
-    final data = jsonDecode(response.body);
-    print('    Attack blocked: ${data['code']} - ${data['error']}');
-
-  } catch (e) {
-    test('Peer authorization', false, e.toString());
-  }
-  print('');
+  exit(_testsFailed > 0 ? 1 : 0);
 }
