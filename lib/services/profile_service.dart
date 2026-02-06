@@ -805,22 +805,19 @@ class ProfileService {
 
       final jsonString = const JsonEncoder.withIndent('  ').convert(exportData);
 
-      // Open save dialog - allows user to choose location outside app folder
+      // Open save dialog - bytes parameter required for Android SAF support
       final result = await FilePicker.platform.saveFile(
         dialogTitle: 'Export Profiles',
         fileName: defaultFileName,
         type: FileType.custom,
         allowedExtensions: ['json'],
+        bytes: Uint8List.fromList(utf8.encode(jsonString)),
       );
 
       if (result == null) {
         LogService().log('Profile export cancelled by user');
         return null;
       }
-
-      // Write the file
-      final file = File(result);
-      await file.writeAsString(jsonString);
 
       LogService().log('Profiles exported to: $result');
       return result;

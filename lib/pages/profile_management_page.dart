@@ -339,7 +339,8 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
 
   Future<void> _exportAllProfiles() async {
     final result = await _profileService.exportProfilesToFile();
-    if (result != null && mounted) {
+    if (!mounted) return;
+    if (result != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(_i18n.t('profiles_exported')),
@@ -351,7 +352,8 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
 
   Future<void> _exportSingleProfile(Profile profile) async {
     final result = await _profileService.exportProfilesToFile(singleProfile: profile);
-    if (result != null && mounted) {
+    if (!mounted) return;
+    if (result != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(_i18n.t('profile_exported', params: [profile.callsign])),
