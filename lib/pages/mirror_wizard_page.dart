@@ -383,8 +383,12 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
             ? const Icon(Icons.check_circle, color: Colors.green)
             : const Icon(Icons.chevron_right),
         onTap: () {
+          _discoveryTimer?.cancel();
+          _discoveryTimer = null;
+          _scanCancelled = true;
           setState(() {
             _selectedDevice = device;
+            _isSearching = false;
           });
         },
       ),
