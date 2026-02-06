@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../models/mirror_config.dart';
 import '../services/mirror_config_service.dart';
+import '../services/app_service.dart';
 import '../services/mirror_sync_service.dart';
 import 'mirror_wizard_page.dart';
 
@@ -628,6 +629,7 @@ class _MirrorSettingsPageState extends State<MirrorSettingsPage> {
             peerCallsign: peer.callsign,
             syncStyle: style,
             ignorePatterns: appConfig.ignorePatterns,
+            storage: AppService().profileStorage,
           );
           if (result.success) {
             totalAdded += result.filesAdded;
@@ -1154,6 +1156,7 @@ class _PeerSettingsPageState extends State<PeerSettingsPage> {
           peerCallsign: _peer.callsign,
           syncStyle: style,
           ignorePatterns: appConfig.ignorePatterns,
+          storage: AppService().profileStorage,
         );
         if (result.success) {
           totalAdded += result.filesAdded;
