@@ -3,11 +3,14 @@
 /// Step-by-step wizard for adding a mirror peer device.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/mirror_config.dart';
 import '../services/mirror_config_service.dart';
+import '../services/station_discovery_service.dart';
 
 /// Wizard for pairing a new mirror device
 class MirrorWizardPage extends StatefulWidget {
@@ -24,6 +27,8 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
   int _currentStep = 0;
   bool _isSearching = false;
   List<_DiscoveredDevice> _discoveredDevices = [];
+  Timer? _discoveryTimer;
+  bool _scanCancelled = false;
   _DiscoveredDevice? _selectedDevice;
   String _manualAddress = '';
   final Map<String, bool> _selectedApps = {};
@@ -54,6 +59,8 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
 
   @override
   void dispose() {
+    _discoveryTimer?.cancel();
+    _scanCancelled = true;
     _pageController.dispose();
     super.dispose();
   }
@@ -264,20 +271,19 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
           ),
           const SizedBox(height: 24),
 
-          // Search button
-          Center(
-            child: ElevatedButton.icon(
-              onPressed: _isSearching ? null : _startDiscovery,
-              icon: _isSearching
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.search),
-              label: Text(_isSearching ? 'Searching...' : 'Search for Devices'),
+          // Auto-searching indicator
+          if (_isSearching) ...[
+            const LinearProgressIndicator(),
+            const SizedBox(height: 8),
+            Center(
+              child: Text(
+                'Searching your network...',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
+              ),
             ),
-          ),
+          ],
           const SizedBox(height: 24),
 
           // Discovered devices
@@ -769,6 +775,12 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
 
   void _nextStep() {
     if (_currentStep < 4) {
+      // Cancel discovery when leaving step 1
+      if (_currentStep == 1) {
+        _discoveryTimer?.cancel();
+        _discoveryTimer = null;
+        _scanCancelled = true;
+      }
       setState(() {
         _currentStep++;
       });
@@ -776,11 +788,26 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeInOut,
       );
+      // Auto-start discovery when entering step 1
+      if (_currentStep == 1) {
+        _startDiscovery();
+        _discoveryTimer?.cancel();
+        _discoveryTimer = Timer.periodic(
+          const Duration(seconds: 5),
+          (_) => _startDiscovery(),
+        );
+      }
     }
   }
 
   void _previousStep() {
     if (_currentStep > 0) {
+      // Cancel discovery when leaving step 1
+      if (_currentStep == 1) {
+        _discoveryTimer?.cancel();
+        _discoveryTimer = null;
+        _scanCancelled = true;
+      }
       setState(() {
         _currentStep--;
       });
@@ -792,30 +819,47 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
   }
 
   void _startDiscovery() async {
+    if (_isSearching) return;
+
     setState(() {
       _isSearching = true;
-      _discoveredDevices = [];
+      _scanCancelled = false;
     });
 
-    // TODO: Implement actual discovery using LAN/BLE
-    // For now, simulate discovery with a delay
-    await Future.delayed(const Duration(seconds: 2));
+    final selectedId = _selectedDevice?.id;
 
-    if (mounted) {
-      setState(() {
-        _isSearching = false;
-        // Simulated discovered devices for testing
-        _discoveredDevices = [
-          _DiscoveredDevice(
-            id: const Uuid().v4(),
-            name: 'Android Phone',
-            address: '192.168.1.45',
-            platform: 'Android',
-            method: 'lan',
-            latencyMs: 12,
-          ),
-        ];
-      });
+    try {
+      await StationDiscoveryService().scanWithProgress(
+        onProgress: (message, scanned, total, results) {
+          if (!mounted || _scanCancelled) return;
+          setState(() {
+            _discoveredDevices = results.map((r) {
+              return _DiscoveredDevice(
+                id: '${r.ip}:${r.port}',
+                name: r.displayName,
+                address: '${r.ip}:${r.port}',
+                platform: r.type,
+                method: 'lan',
+              );
+            }).toList();
+            // Preserve selection across re-scans
+            if (selectedId != null &&
+                _selectedDevice != null &&
+                _discoveredDevices.any((d) => d.id == selectedId)) {
+              _selectedDevice = _discoveredDevices.firstWhere(
+                (d) => d.id == selectedId,
+              );
+            }
+          });
+        },
+        shouldCancel: () => _scanCancelled,
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSearching = false;
+        });
+      }
     }
   }
 

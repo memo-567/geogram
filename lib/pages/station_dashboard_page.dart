@@ -726,9 +726,9 @@ class _StationDashboardPageState extends State<StationDashboardPage> {
       );
       for (final interface in interfaces) {
         for (final addr in interface.addresses) {
-          if (!addr.isLoopback && addr.address.startsWith('192.') ||
+          if (!addr.isLoopback && (addr.address.startsWith('192.') ||
               addr.address.startsWith('10.') ||
-              addr.address.startsWith('172.')) {
+              addr.address.startsWith('172.'))) {
             ips.add(addr.address);
           }
         }
