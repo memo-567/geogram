@@ -1,8 +1,11 @@
+import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, compute;
 import 'package:path/path.dart' as p;
+import 'app_service.dart';
+import 'profile_storage.dart';
 import 'storage_config.dart';
 
 /// Result of reading log file in isolate
@@ -72,6 +75,16 @@ class LogService {
   DateTime? _currentLogDay;
   bool _initialized = false;
 
+  // ProfileStorage support for encrypted profiles
+  ProfileStorage? _storage;
+  final StringBuffer _pendingBuffer = StringBuffer();
+  final StringBuffer _pendingCrashBuffer = StringBuffer();
+  int _pendingLineCount = 0;
+  Timer? _flushTimer;
+  static const int _flushLineThreshold = 50;
+  static const Duration _flushInterval = Duration(seconds: 3);
+  bool get _useStorage => _storage?.isEncrypted == true;
+
   // Loop detection: track recent messages to detect tight loops
   final Map<String, _LogCounter> _recentMessages = {};
   static const int _loopDetectionWindowMs = 5000; // 5 second window
@@ -110,6 +123,13 @@ class LogService {
       return;
     }
 
+    // Flush any pending buffered logs from previous profile
+    if (_useStorage) {
+      await _flushPendingLogs();
+      _flushTimer?.cancel();
+      _flushTimer = null;
+    }
+
     // Close existing sinks if any
     try {
       await _logSink?.flush();
@@ -122,22 +142,53 @@ class LogService {
     _crashSink = null;
     _currentLogDay = null;
 
+    // Get storage from AppService (already set by this point)
+    _storage = AppService().profileStorage;
+
     // Set up profile-specific logs directory
     _logsDir = Directory(profileLogsDir);
-    if (!await _logsDir!.exists()) {
-      await _logsDir!.create(recursive: true);
+    if (_useStorage) {
+      await _storage!.createDirectory('log');
+    } else {
+      if (!await _logsDir!.exists()) {
+        await _logsDir!.create(recursive: true);
+      }
     }
 
-    // Open sinks for current day
-    _openSinks(DateTime.now());
-    _logSink?.writeln('\n=== Profile activated: $callsign at ${DateTime.now()} ===');
-    await _logSink?.flush();
+    // Open sinks for current day (skipped when encrypted)
+    final now = DateTime.now();
+    _openSinks(now);
+
+    if (_useStorage) {
+      _currentLogDay = DateTime(now.year, now.month, now.day);
+      final message = '\n=== Profile activated: $callsign at $now ===\n';
+      _pendingBuffer.write(message);
+      _pendingLineCount++;
+      _startFlushTimer();
+    } else {
+      _logSink?.writeln('\n=== Profile activated: $callsign at $now ===');
+      await _logSink?.flush();
+    }
   }
 
   void _rotateIfNeeded(DateTime now) {
     if (kIsWeb || _logsDir == null) return;
 
     final today = DateTime(now.year, now.month, now.day);
+    if (_useStorage) {
+      // For encrypted storage, just track the current day for path computation
+      if (_currentLogDay != null &&
+          _currentLogDay!.year == today.year &&
+          _currentLogDay!.month == today.month &&
+          _currentLogDay!.day == today.day) {
+        return;
+      }
+      // Day changed — flush old day's buffer, then update
+      _flushPendingLogs();
+      _currentLogDay = today;
+      return;
+    }
+
     if (_currentLogDay != null &&
         _currentLogDay!.year == today.year &&
         _currentLogDay!.month == today.month &&
@@ -154,6 +205,26 @@ class LogService {
     if (kIsWeb) return;
 
     try {
+      if (_useStorage) {
+        _pendingBuffer.writeln(message);
+        if (isCrash) {
+          _pendingCrashBuffer.writeln(message);
+        }
+        _pendingLineCount++;
+        if (_pendingLineCount >= _flushLineThreshold) {
+          _flushPendingLogs(); // Fire and forget
+        } else {
+          _startFlushTimer();
+        }
+        // Check file size every 1000 writes
+        _writeCount++;
+        if (_writeCount >= 1000) {
+          _writeCount = 0;
+          _checkAndPruneLogFile();
+        }
+        return;
+      }
+
       _logSink?.writeln(message);
       if (isCrash) {
         _crashSink?.writeln(message);
@@ -170,10 +241,72 @@ class LogService {
     }
   }
 
+  /// Compute the relative log file path for a given day (within profile storage)
+  String _logRelPath(DateTime day) {
+    final dateStr =
+        '${day.year.toString().padLeft(4, '0')}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+    return 'log/${day.year}/log-$dateStr.txt';
+  }
+
+  /// Flush buffered log lines to encrypted storage
+  Future<void> _flushPendingLogs() async {
+    if (_storage == null) return;
+
+    if (_pendingBuffer.isNotEmpty) {
+      final content = _pendingBuffer.toString();
+      _pendingBuffer.clear();
+      _pendingLineCount = 0;
+      final day = _currentLogDay ?? DateTime.now();
+      final relPath = _logRelPath(day);
+      try {
+        await _storage!.appendString(relPath, content);
+      } catch (e) {
+        print('Error flushing logs to storage: $e');
+      }
+    }
+
+    if (_pendingCrashBuffer.isNotEmpty) {
+      final crashContent = _pendingCrashBuffer.toString();
+      _pendingCrashBuffer.clear();
+      try {
+        await _storage!.appendString('log/crash.txt', crashContent);
+      } catch (e) {
+        print('Error flushing crash logs to storage: $e');
+      }
+    }
+  }
+
+  void _startFlushTimer() {
+    if (_flushTimer?.isActive == true) return;
+    _flushTimer = Timer(_flushInterval, () {
+      _flushPendingLogs();
+    });
+  }
+
   Future<void> _checkAndPruneLogFile() async {
     if (kIsWeb || _logsDir == null || _currentLogDay == null) return;
 
     final now = _currentLogDay!;
+
+    if (_useStorage) {
+      final relPath = _logRelPath(now);
+      final content = await _storage!.readString(relPath);
+      if (content == null) return;
+      final size = content.length; // approximate — byte count ≈ char count for log text
+      if (size <= _maxLogFileSizeBytes) return;
+
+      final lines = content.split('\n');
+      final avgLineSize = size ~/ lines.length;
+      final linesToKeep = _pruneTargetSizeBytes ~/ avgLineSize;
+      final prunedLines = lines.length > linesToKeep
+          ? lines.sublist(lines.length - linesToKeep)
+          : lines;
+      final prunedContent = prunedLines.join('\n');
+      await _storage!.writeString(relPath,
+          '=== Log pruned at ${DateTime.now().toIso8601String()} (was ${(size / 1024 / 1024).toStringAsFixed(1)}MB) ===\n$prunedContent');
+      return;
+    }
+
     final dateStr =
         '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
     final logPath = p.join(_logsDir!.path, '${now.year}', 'log-$dateStr.txt');
@@ -212,6 +345,7 @@ class LogService {
 
   void _openSinks(DateTime now) {
     if (_logsDir == null) return;
+    if (_useStorage) return; // Encrypted storage uses buffered writes, not IOSink
     if (!_logsDir!.existsSync()) {
       _logsDir!.createSync(recursive: true);
     }
@@ -248,6 +382,13 @@ class LogService {
 
   Future<void> dispose() async {
     if (kIsWeb) return;
+
+    if (_useStorage) {
+      await _flushPendingLogs();
+      _flushTimer?.cancel();
+      _flushTimer = null;
+      return;
+    }
 
     try {
       await _logSink?.flush();
@@ -378,6 +519,13 @@ class LogService {
     if (_logsDir == null) return null;
 
     final now = DateTime.now();
+
+    if (_useStorage) {
+      await _flushPendingLogs();
+      final relPath = _logRelPath(now);
+      return await _storage!.readString(relPath);
+    }
+
     final dateStr =
         '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
     final file = File(p.join(_logsDir!.path, '${now.year}', 'log-$dateStr.txt'));
@@ -403,6 +551,24 @@ class LogService {
     }
 
     final now = DateTime.now();
+
+    if (_useStorage) {
+      // Can't pass ProfileStorage to compute() isolate — read directly
+      await _flushPendingLogs();
+      final relPath = _logRelPath(now);
+      final content = await _storage!.readString(relPath);
+      if (content == null) {
+        return LogReadResult(lines: [], totalLines: 0, truncated: false);
+      }
+      final allLines = content.split('\n').where((l) => l.trim().isNotEmpty).toList();
+      final totalLines = allLines.length;
+      if (totalLines <= maxLines) {
+        return LogReadResult(lines: allLines, totalLines: totalLines, truncated: false);
+      }
+      final lines = allLines.sublist(totalLines - maxLines);
+      return LogReadResult(lines: lines, totalLines: totalLines, truncated: true);
+    }
+
     final dateStr =
         '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
     final filePath = p.join(_logsDir!.path, '${now.year}', 'log-$dateStr.txt');
@@ -416,6 +582,11 @@ class LogService {
       await init();
     }
     if (_logsDir == null) return null;
+
+    if (_useStorage) {
+      await _flushPendingLogs();
+      return await _storage!.readString('log/crash.txt');
+    }
 
     final crashFile = File(p.join(_logsDir!.path, 'crash.txt'));
     if (!await crashFile.exists()) return null;
@@ -432,6 +603,14 @@ class LogService {
       await init();
     }
     if (_logsDir == null) return;
+
+    if (_useStorage) {
+      _pendingCrashBuffer.clear();
+      try {
+        await _storage!.delete('log/crash.txt');
+      } catch (_) {}
+      return;
+    }
 
     final crashFile = File(p.join(_logsDir!.path, 'crash.txt'));
     try {
@@ -455,6 +634,10 @@ class LogService {
       await init();
     }
     if (_logsDir == null) return null;
+
+    if (_useStorage) {
+      return await _storage!.readJson('log/heartbeat.json');
+    }
 
     final file = File(p.join(_logsDir!.path, 'heartbeat.json'));
     if (!await file.exists()) return null;
