@@ -460,56 +460,57 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
                       color: theme.colorScheme.outline,
                     ),
                   ),
+                  if (isSelected)
+                    DropdownButton<SyncStyle>(
+                      value: style,
+                      underline: const SizedBox(),
+                      isDense: true,
+                      items: [
+                        DropdownMenuItem(
+                          value: SyncStyle.sendReceive,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: const [
+                              Icon(Icons.sync, size: 16),
+                              SizedBox(width: 4),
+                              Text('Send & Receive'),
+                            ],
+                          ),
+                        ),
+                        DropdownMenuItem(
+                          value: SyncStyle.receiveOnly,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: const [
+                              Icon(Icons.download, size: 16),
+                              SizedBox(width: 4),
+                              Text('Receive Only'),
+                            ],
+                          ),
+                        ),
+                        DropdownMenuItem(
+                          value: SyncStyle.sendOnly,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: const [
+                              Icon(Icons.upload, size: 16),
+                              SizedBox(width: 4),
+                              Text('Send Only'),
+                            ],
+                          ),
+                        ),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() {
+                            _appStyles[app.id] = value;
+                          });
+                        }
+                      },
+                    ),
                 ],
               ),
             ),
-            if (isSelected)
-              DropdownButton<SyncStyle>(
-                value: style,
-                underline: const SizedBox(),
-                items: [
-                  DropdownMenuItem(
-                    value: SyncStyle.sendReceive,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: const [
-                        Icon(Icons.sync, size: 16),
-                        SizedBox(width: 4),
-                        Text('Send & Receive'),
-                      ],
-                    ),
-                  ),
-                  DropdownMenuItem(
-                    value: SyncStyle.receiveOnly,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: const [
-                        Icon(Icons.download, size: 16),
-                        SizedBox(width: 4),
-                        Text('Receive Only'),
-                      ],
-                    ),
-                  ),
-                  DropdownMenuItem(
-                    value: SyncStyle.sendOnly,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: const [
-                        Icon(Icons.upload, size: 16),
-                        SizedBox(width: 4),
-                        Text('Send Only'),
-                      ],
-                    ),
-                  ),
-                ],
-                onChanged: (value) {
-                  if (value != null) {
-                    setState(() {
-                      _appStyles[app.id] = value;
-                    });
-                  }
-                },
-              ),
           ],
         ),
       ),
