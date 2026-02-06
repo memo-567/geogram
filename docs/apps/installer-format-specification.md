@@ -372,7 +372,7 @@ For the complete security model, see [security-model.md](security-model.md).
 - [Security Model](security-model.md) — Sandboxing, permissions, and code signing
 - [Platform Considerations](platform-considerations.md) — Platform-specific behavior
 - [Examples](examples/) — Sample manifests and widget trees
-- [Flasher Format Specification](../apps/flasher-format-specification.md) — Similar module pattern
+- [Flasher Format Specification](flasher-format-specification.md) — Similar module pattern
 
 ## Change Log
 

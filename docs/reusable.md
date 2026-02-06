@@ -7913,7 +7913,7 @@ Future<List<String>> _getLocalIpAddresses() async {
 }
 ```
 
-**See**: [docs/installer/installer-format-specification.md](installer/installer-format-specification.md)
+**See**: [docs/apps/installer-format-specification.md](apps/installer-format-specification.md)
 
 ---
 
@@ -7934,7 +7934,7 @@ Future<List<String>> _getLocalIpAddresses() async {
 }
 ```
 
-**See**: [docs/installer/js-runtime-api.md](installer/js-runtime-api.md#json-widget-tree-specification)
+**See**: [docs/apps/js-runtime-api.md](apps/js-runtime-api.md#json-widget-tree-specification)
 
 ---
 
@@ -7944,7 +7944,7 @@ Future<List<String>> _getLocalIpAddresses() async {
 
 **Reuse potential**: The bridge pattern (Dart function registered as a JS global, permission-checked, returning Futures mapped to JS Promises) is reusable for any QuickJS-based scripting feature.
 
-**See**: [docs/installer/js-runtime-api.md](installer/js-runtime-api.md)
+**See**: [docs/apps/js-runtime-api.md](apps/js-runtime-api.md)
 
 ---
 
@@ -7954,7 +7954,7 @@ Future<List<String>> _getLocalIpAddresses() async {
 
 **Reuse potential**: The hook point pattern (registration files in a well-known directory, lifecycle callbacks, render functions returning widget trees) can be applied to any plugin system.
 
-**See**: [docs/installer/extension-mechanism.md](installer/extension-mechanism.md)
+**See**: [docs/apps/extension-mechanism.md](apps/extension-mechanism.md)
 
 ---
 
@@ -7964,7 +7964,7 @@ Future<List<String>> _getLocalIpAddresses() async {
 
 **Reuse potential**: The validation approach (schema check → file existence check → cross-reference check → size limit check) is a general pattern for validating any package or bundle format.
 
-**See**: [docs/installer/manifest-schema.md](installer/manifest-schema.md#validation-rules)
+**See**: [docs/apps/manifest-schema.md](apps/manifest-schema.md#validation-rules)
 
 ---
 
@@ -7984,4 +7984,4 @@ bool isReservedName(String name) {
 }
 ```
 
-**See**: [docs/installer/manifest-schema.md](installer/manifest-schema.md#reserved-folder-names)
+**See**: [docs/apps/manifest-schema.md](apps/manifest-schema.md#reserved-folder-names)
