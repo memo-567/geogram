@@ -43,6 +43,7 @@ import 'alert_feedback_service.dart';
 import 'alert_sharing_service.dart';
 import 'mirror_config_service.dart';
 import 'mirror_sync_service.dart';
+import '../models/mirror_config.dart';
 import 'encrypted_storage_service.dart';
 import 'place_feedback_service.dart';
 import 'station_alert_service.dart';
@@ -578,6 +579,7 @@ class LogApiService {
           '/api/mirror/request': 'POST request simple mirror sync (with signed challenge)',
           '/api/mirror/manifest': 'GET folder manifest for sync',
           '/api/mirror/file': 'GET file content for sync',
+          '/api/mirror/pair': 'POST reciprocal pairing (registers both devices as peers)',
         },
       }),
       headers: headers,
@@ -13086,6 +13088,11 @@ ul, ol { margin-left: 30px; padding: 0; }
       return await _handleMirrorFile(request, headers);
     }
 
+    // POST /api/mirror/pair - Reciprocal pairing
+    if (urlPath == 'api/mirror/pair' && request.method == 'POST') {
+      return await _handleMirrorPair(request, headers);
+    }
+
     return shelf.Response.notFound(
       jsonEncode({'error': 'Mirror endpoint not found'}),
       headers: headers,
@@ -13482,6 +13489,89 @@ ul, ol { margin-left: 30px; padding: 0; }
       );
     } catch (e, stack) {
       LogService().log('LogApiService: Mirror file error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle POST /api/mirror/pair - Reciprocal pairing
+  Future<shelf.Response> _handleMirrorPair(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+
+      final peerNpub = body['npub'] as String?;
+      final peerCallsign = body['callsign'] as String?;
+      final peerDeviceName = body['device_name'] as String?;
+      final peerPlatform = body['platform'] as String?;
+      final peerAddress = body['address'] as String?;
+      final peerApps = (body['apps'] as List<dynamic>?)?.cast<String>() ?? [];
+
+      if (peerNpub == null || peerNpub.isEmpty ||
+          peerCallsign == null || peerCallsign.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing npub or callsign',
+          }),
+          headers: headers,
+        );
+      }
+
+      // 1. Register the remote peer as allowed to sync from us
+      MirrorSyncService.instance.addAllowedPeer(peerNpub, peerCallsign);
+
+      // 2. Create a MirrorPeer in our config (reciprocal pairing)
+      final apps = <String, AppSyncConfig>{};
+      for (final appId in peerApps) {
+        apps[appId] = AppSyncConfig(
+          appId: appId,
+          style: SyncStyle.sendReceive,
+          enabled: true,
+        );
+      }
+
+      final peer = MirrorPeer(
+        peerId: peerNpub,
+        npub: peerNpub,
+        name: peerDeviceName ?? peerCallsign,
+        callsign: peerCallsign,
+        addresses: peerAddress != null ? [peerAddress] : [],
+        apps: apps,
+        platform: peerPlatform,
+      );
+
+      await MirrorConfigService.instance.addPeer(peer);
+
+      // 3. Enable mirror if not already
+      if (!MirrorConfigService.instance.isEnabled) {
+        await MirrorConfigService.instance.setEnabled(true);
+      }
+
+      // 4. Return our info so the requester can add us
+      final profile = ProfileService().getProfile();
+      final config = MirrorConfigService.instance.config;
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'npub': profile.npub,
+          'callsign': profile.callsign,
+          'device_name': config?.deviceName ?? 'Unknown',
+          'platform': io.Platform.operatingSystem,
+        }),
+        headers: headers,
+      );
+    } catch (e, stack) {
+      LogService().log('LogApiService: Mirror pair error: $e');
       LogService().log('Stack: $stack');
       return shelf.Response.internalServerError(
         body: jsonEncode({

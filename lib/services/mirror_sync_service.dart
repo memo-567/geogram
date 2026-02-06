@@ -21,6 +21,7 @@ import 'package:uuid/uuid.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
 import 'log_service.dart';
+import 'mirror_config_service.dart';
 import 'profile_service.dart';
 import 'storage_config.dart';
 
@@ -332,6 +333,19 @@ class MirrorSyncService {
 
   /// Get list of allowed peers
   Map<String, String> get allowedPeers => Map.unmodifiable(_allowedPeers);
+
+  /// Load allowed peers from persisted MirrorConfig.
+  /// Called on startup and after pairing to restore _allowedPeers from disk.
+  void loadAllowedPeersFromConfig() {
+    final config = MirrorConfigService.instance.config;
+    if (config == null) return;
+    for (final peer in config.peers) {
+      if (peer.npub.isNotEmpty) {
+        _allowedPeers[peer.npub] = peer.callsign;
+      }
+    }
+    LogService().log('MirrorSync: Loaded ${_allowedPeers.length} allowed peers from config');
+  }
 
   /// Generate a challenge for a folder sync request
   /// The requester must sign this challenge to prove identity

@@ -257,6 +257,9 @@ class MirrorPeer {
   /// Unique peer ID
   final String peerId;
 
+  /// Nostr public key (npub) for crypto identity
+  String npub;
+
   /// Friendly name
   String name;
 
@@ -286,6 +289,7 @@ class MirrorPeer {
 
   MirrorPeer({
     required this.peerId,
+    this.npub = '',
     required this.name,
     required this.callsign,
     this.addresses = const [],
@@ -328,6 +332,7 @@ class MirrorPeer {
 
     return MirrorPeer(
       peerId: json['peer_id'] as String,
+      npub: json['npub'] as String? ?? '',
       name: json['name'] as String,
       callsign: json['callsign'] as String,
       addresses: (json['addresses'] as List<dynamic>?)
@@ -355,6 +360,7 @@ class MirrorPeer {
 
   Map<String, dynamic> toJson() => {
         'peer_id': peerId,
+        'npub': npub,
         'name': name,
         'callsign': callsign,
         'addresses': addresses,
@@ -367,6 +373,7 @@ class MirrorPeer {
       };
 
   MirrorPeer copyWith({
+    String? npub,
     String? name,
     String? callsign,
     List<String>? addresses,
@@ -379,6 +386,7 @@ class MirrorPeer {
   }) {
     return MirrorPeer(
       peerId: peerId,
+      npub: npub ?? this.npub,
       name: name ?? this.name,
       callsign: callsign ?? this.callsign,
       addresses: addresses ?? List.from(this.addresses),

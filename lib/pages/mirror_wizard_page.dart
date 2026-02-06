@@ -13,6 +13,9 @@ import 'package:uuid/uuid.dart';
 
 import '../models/mirror_config.dart';
 import '../services/mirror_config_service.dart';
+import '../services/mirror_sync_service.dart';
+import '../services/profile_service.dart';
+import '../services/log_service.dart';
 
 /// Wizard for pairing a new mirror device
 class MirrorWizardPage extends StatefulWidget {
@@ -923,12 +926,16 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
                       ip;
                   final platform =
                       (json['platform'] as String?) ?? 'Unknown';
+                  final npub = (json['npub'] as String?) ?? '';
+                  final callsign = (json['callsign'] as String?) ?? '';
                   return _DiscoveredDevice(
                     id: '$ip:$port',
                     name: name,
                     address: '$ip:$port',
                     platform: platform,
                     method: 'lan',
+                    npub: npub,
+                    callsign: callsign,
                   );
                 } catch (_) {
                   // Valid response but not JSON — still a geogram device
@@ -995,32 +1002,96 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
   }
 
   void _finishWizard() async {
-    // Create the peer from wizard data
+    final address = _selectedDevice?.address ?? _manualAddress;
+    final peerUrl = 'http://$address';
+    final profile = ProfileService().getProfile();
+    final syncService = MirrorSyncService.instance;
+
+    // Build selected app list
+    final selectedAppIds = _selectedApps.entries
+        .where((e) => e.value)
+        .map((e) => e.key)
+        .toList();
+
     final apps = <String, AppSyncConfig>{};
-    for (final entry in _selectedApps.entries) {
-      if (entry.value) {
-        apps[entry.key] = AppSyncConfig(
-          appId: entry.key,
-          style: _appStyles[entry.key] ?? SyncStyle.sendReceive,
-          enabled: true,
-        );
-      }
+    for (final appId in selectedAppIds) {
+      apps[appId] = AppSyncConfig(
+        appId: appId,
+        style: _appStyles[appId] ?? SyncStyle.sendReceive,
+        enabled: true,
+      );
     }
 
+    String remoteNpub = _selectedDevice?.npub ?? '';
+    String remoteCallsign = _selectedDevice?.callsign ?? '';
+    String remoteName = _selectedDevice?.name ?? 'Manual Device';
+    String? remotePlatform = _selectedDevice?.platform;
+
+    // 1. POST /api/mirror/pair on remote to do reciprocal pairing
+    try {
+      final response = await http.post(
+        Uri.parse('$peerUrl/api/mirror/pair'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'npub': profile.npub,
+          'callsign': profile.callsign,
+          'device_name': _configService.config?.deviceName ?? 'My Device',
+          'platform': Platform.operatingSystem,
+          'address': null, // Remote will see us via the request
+          'apps': selectedAppIds,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final body = jsonDecode(response.body) as Map<String, dynamic>;
+        if (body['success'] == true) {
+          remoteNpub = (body['npub'] as String?) ?? remoteNpub;
+          remoteCallsign = (body['callsign'] as String?) ?? remoteCallsign;
+          remoteName = (body['device_name'] as String?) ?? remoteName;
+          remotePlatform = (body['platform'] as String?) ?? remotePlatform;
+        }
+      }
+    } catch (e) {
+      LogService().log('MirrorWizard: Pair request failed: $e');
+      // Continue anyway — save the peer config so user can retry
+    }
+
+    // 2. Register the remote as an allowed peer locally
+    if (remoteNpub.isNotEmpty) {
+      syncService.addAllowedPeer(remoteNpub, remoteCallsign);
+    }
+
+    // 3. Save MirrorPeer with remote's npub as peerId
+    final peerId = remoteNpub.isNotEmpty ? remoteNpub : (const Uuid().v4());
     final peer = MirrorPeer(
-      peerId: _selectedDevice?.id ?? const Uuid().v4(),
-      name: _selectedDevice?.name ?? 'Manual Device',
-      callsign: '', // Will be filled when actually connected
-      addresses: [_selectedDevice?.address ?? _manualAddress],
+      peerId: peerId,
+      npub: remoteNpub,
+      name: remoteName,
+      callsign: remoteCallsign,
+      addresses: [address],
       apps: apps,
-      platform: _selectedDevice?.platform,
+      platform: remotePlatform,
     );
 
     await _configService.addPeer(peer);
 
-    // Enable mirror if not already enabled
     if (!_configService.isEnabled) {
       await _configService.setEnabled(true);
+    }
+
+    // 4. Initial sync if downloadAll is selected
+    if (_initialSyncOption == InitialSyncOption.downloadAll) {
+      for (final appId in selectedAppIds) {
+        final style = _appStyles[appId] ?? SyncStyle.sendReceive;
+        if (style == SyncStyle.sendReceive || style == SyncStyle.receiveOnly) {
+          try {
+            await syncService.syncFolder(peerUrl, appId);
+          } catch (e) {
+            LogService().log('MirrorWizard: Initial sync failed for $appId: $e');
+          }
+        }
+      }
+      await _configService.markPeerSynced(peerId);
     }
 
     if (mounted) {
@@ -1037,6 +1108,8 @@ class _DiscoveredDevice {
   final String platform;
   final String method; // lan, ble, manual
   final int? latencyMs;
+  final String npub;
+  final String callsign;
 
   _DiscoveredDevice({
     required this.id,
@@ -1045,6 +1118,8 @@ class _DiscoveredDevice {
     required this.platform,
     required this.method,
     this.latencyMs,
+    this.npub = '',
+    this.callsign = '',
   });
 }
 

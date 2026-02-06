@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../models/mirror_config.dart';
 import '../services/mirror_config_service.dart';
+import '../services/mirror_sync_service.dart';
 import 'mirror_wizard_page.dart';
 
 /// Settings page for mirror sync configuration
@@ -31,6 +32,8 @@ class _MirrorSettingsPageState extends State<MirrorSettingsPage> {
 
   Future<void> _loadConfig() async {
     final config = await _configService.loadConfig();
+    // Restore in-memory allowed peers from persisted config
+    MirrorSyncService.instance.loadAllowedPeersFromConfig();
     if (mounted) {
       setState(() {
         _config = config;
@@ -594,11 +597,55 @@ class _MirrorSettingsPageState extends State<MirrorSettingsPage> {
     await _loadConfig();
   }
 
-  void _syncAll() {
-    // TODO: Trigger sync with all connected peers
+  void _syncAll() async {
+    final peers = _config?.peers ?? [];
+    if (peers.isEmpty) return;
+
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Sync started...')),
+      const SnackBar(content: Text('Syncing all peers...')),
     );
+
+    final syncService = MirrorSyncService.instance;
+    var totalAdded = 0;
+    var totalModified = 0;
+    var errors = 0;
+
+    for (final peer in peers) {
+      if (peer.addresses.isEmpty) continue;
+      final peerUrl = 'http://${peer.addresses.first}';
+      final enabledApps = _configService.getEnabledAppsForPeer(peer.peerId);
+
+      for (final appId in enabledApps) {
+        final appConfig = peer.apps[appId];
+        if (appConfig == null) continue;
+        final style = appConfig.style;
+        if (style != SyncStyle.sendReceive && style != SyncStyle.receiveOnly) {
+          continue;
+        }
+        try {
+          final result = await syncService.syncFolder(peerUrl, appId);
+          if (result.success) {
+            totalAdded += result.filesAdded;
+            totalModified += result.filesModified;
+          } else {
+            errors++;
+          }
+        } catch (_) {
+          errors++;
+        }
+      }
+
+      await _configService.markPeerSynced(peer.peerId);
+    }
+
+    if (mounted) {
+      final msg = errors > 0
+          ? 'Sync done with $errors error(s). +$totalAdded new, ~$totalModified updated.'
+          : 'Sync complete. +$totalAdded new, ~$totalModified updated.';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg)),
+      );
+    }
   }
 }
 
@@ -1064,10 +1111,54 @@ class _PeerSettingsPageState extends State<PeerSettingsPage> {
     }
   }
 
-  void _syncNow() {
-    // TODO: Trigger sync with this peer
+  void _syncNow() async {
+    if (_peer.addresses.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No address known for this peer')),
+      );
+      return;
+    }
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Syncing with ${_peer.name}...')),
     );
+
+    final peerUrl = 'http://${_peer.addresses.first}';
+    final syncService = MirrorSyncService.instance;
+    final enabledApps = _configService.getEnabledAppsForPeer(_peer.peerId);
+    var totalAdded = 0;
+    var totalModified = 0;
+    var errors = 0;
+
+    for (final appId in enabledApps) {
+      final appConfig = _peer.apps[appId];
+      if (appConfig == null) continue;
+      final style = appConfig.style;
+      if (style != SyncStyle.sendReceive && style != SyncStyle.receiveOnly) {
+        continue;
+      }
+      try {
+        final result = await syncService.syncFolder(peerUrl, appId);
+        if (result.success) {
+          totalAdded += result.filesAdded;
+          totalModified += result.filesModified;
+        } else {
+          errors++;
+        }
+      } catch (_) {
+        errors++;
+      }
+    }
+
+    await _configService.markPeerSynced(_peer.peerId);
+
+    if (mounted) {
+      final msg = errors > 0
+          ? 'Sync done with $errors error(s). +$totalAdded new, ~$totalModified updated.'
+          : 'Sync complete. +$totalAdded new, ~$totalModified updated.';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg)),
+      );
+    }
   }
 }
