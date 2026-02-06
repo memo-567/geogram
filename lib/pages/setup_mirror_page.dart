@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -22,11 +23,20 @@ class _SetupMirrorPageState extends State<SetupMirrorPage> {
   final I18nService _i18n = I18nService();
   List<String> _ipAddresses = [];
   bool _isLoading = true;
+  Timer? _pollTimer;
 
   @override
   void initState() {
     super.initState();
     _fetchIpAddresses();
+    _pollTimer = Timer.periodic(
+        const Duration(seconds: 3), (_) => _fetchIpAddresses());
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _fetchIpAddresses() async {
