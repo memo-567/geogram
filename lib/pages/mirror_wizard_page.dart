@@ -16,6 +16,7 @@ import '../services/mirror_config_service.dart';
 import '../services/mirror_sync_service.dart';
 import '../services/profile_service.dart';
 import '../services/log_service.dart';
+import '../services/storage_config.dart';
 
 /// Wizard for pairing a new mirror device
 class MirrorWizardPage extends StatefulWidget {
@@ -37,6 +38,7 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
   _DiscoveredDevice? _selectedDevice;
   final Map<String, bool> _selectedApps = {};
   final Map<String, SyncStyle> _appStyles = {};
+  final Map<String, int> _appSizes = {};
 
   // Available apps to sync
   final List<_AppInfo> _availableApps = [
@@ -76,6 +78,33 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
     for (final app in _availableApps) {
       _selectedApps[app.id] = true;
       _appStyles[app.id] = SyncStyle.sendReceive;
+    }
+    _computeAppSizes();
+  }
+
+  Future<void> _computeAppSizes() async {
+    final callsign = ProfileService().getProfile().callsign;
+    final callsignDir = StorageConfig().getCallsignDir(callsign);
+
+    for (final app in _availableApps) {
+      final appDir = Directory('$callsignDir/${app.id}');
+      if (await appDir.exists()) {
+        int size = 0;
+        try {
+          await for (final entity in appDir.list(recursive: true, followLinks: false)) {
+            if (entity is File) {
+              try {
+                size += await entity.length();
+              } catch (_) {}
+            }
+          }
+        } catch (_) {}
+        if (mounted) {
+          setState(() {
+            _appSizes[app.id] = size;
+          });
+        }
+      }
     }
   }
 
@@ -417,7 +446,6 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
 
   Widget _buildAppsStep() {
     final theme = Theme.of(context);
-    final canProceed = _selectedApps.values.any((v) => v);
 
     return Column(
       children: [
@@ -453,10 +481,18 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
     );
   }
 
+  static String _formatSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+  }
+
   Widget _buildAppSelectTile(_AppInfo app) {
     final theme = Theme.of(context);
     final isSelected = _selectedApps[app.id] ?? false;
     final style = _appStyles[app.id] ?? SyncStyle.sendReceive;
+    final sizeBytes = _appSizes[app.id];
 
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 4),
@@ -478,11 +514,24 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    app.name,
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+                  Row(
+                    children: [
+                      Text(
+                        app.name,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      if (sizeBytes != null && sizeBytes > 0) ...[
+                        const SizedBox(width: 8),
+                        Text(
+                          _formatSize(sizeBytes),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.outline,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                   Text(
                     app.description,
