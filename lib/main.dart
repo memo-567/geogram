@@ -662,6 +662,7 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   EventSubscription<DMNotificationTappedEvent>? _dmNotificationSubscription;
   EventSubscription<TransferOfferReceivedEvent>? _transferOfferSubscription;
+  EventSubscription<MirrorPairCompletedEvent>? _mirrorPairSubscription;
 
   @override
   void initState() {
@@ -692,6 +693,24 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
       _showTransferOfferDialog(event);
     });
 
+    // Subscribe to mirror pairing completed (device B receives this)
+    _mirrorPairSubscription = EventBus().on<MirrorPairCompletedEvent>((event) {
+      if (_navigatorKey.currentContext == null) return;
+      showDialog(
+        context: _navigatorKey.currentContext!,
+        builder: (context) => AlertDialog(
+          title: const Text('Mirror Active'),
+          content: Text('You are a mirror with ${event.peerCallsign}'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    });
+
     // Check for pending notification on startup (handles cold start)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkPendingNotification();
@@ -704,6 +723,7 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
     _themeService.removeListener(_onThemeChanged);
     _dmNotificationSubscription?.cancel();
     _transferOfferSubscription?.cancel();
+    _mirrorPairSubscription?.cancel();
     // Close all encrypted storage connections
     EncryptedStorageService().closeAllArchives();
     super.dispose();

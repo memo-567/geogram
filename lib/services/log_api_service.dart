@@ -73,6 +73,7 @@ import '../transfer/models/transfer_offer.dart';
 import '../transfer/services/transfer_service.dart';
 import '../transfer/services/p2p_transfer_service.dart';
 import '../pages/transfer_send_page.dart';
+import '../util/event_bus.dart';
 
 class LogApiService {
   static final LogApiService _instance = LogApiService._internal();
@@ -13679,7 +13680,25 @@ ul, ol { margin-left: 30px; padding: 0; }
         await MirrorConfigService.instance.setEnabled(true);
       }
 
-      // 4. Return our info so the requester can add us
+      // 4. Create a local mirror profile for the peer's callsign (if it doesn't exist)
+      final existingProfile = ProfileService().getProfileByCallsign(peerCallsign);
+      if (existingProfile == null) {
+        final keys = NostrCrypto.generateKeyPair();
+        final mirrorProfile = await ProfileService().createNewProfileWithKeys(
+          npub: keys.npub,
+          nsec: keys.nsec,
+          callsign: peerCallsign,
+          nickname: 'Mirror of $peerCallsign',
+        );
+        await ProfileService().switchToProfile(mirrorProfile.id);
+      } else {
+        await ProfileService().switchToProfile(existingProfile.id);
+      }
+
+      // 5. Notify UI
+      EventBus().fire(MirrorPairCompletedEvent(peerCallsign: peerCallsign));
+
+      // 6. Return our info so the requester can add us
       final profile = ProfileService().getProfile();
       final config = MirrorConfigService.instance.config;
 

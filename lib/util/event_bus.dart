@@ -578,6 +578,12 @@ class TransferResumedEvent extends AppEvent {
 /// Navigate to home/apps tab
 class NavigateToHomeEvent extends AppEvent {}
 
+/// Mirror pairing completed on device B (receiver side)
+class MirrorPairCompletedEvent extends AppEvent {
+  final String peerCallsign;
+  MirrorPairCompletedEvent({required this.peerCallsign});
+}
+
 // ============================================================
 // Email Events
 // ============================================================
