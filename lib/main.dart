@@ -114,6 +114,7 @@ import 'pages/security_settings_page.dart';
 import 'pages/storage_settings_page.dart';
 import 'pages/theme_settings_page.dart';
 import 'pages/mirror_settings_page.dart';
+import 'pages/mirror_wizard_page.dart';
 import 'widgets/profile_switcher.dart';
 import 'widgets/transfer/incoming_transfer_dialog.dart';
 import 'transfer/services/p2p_transfer_service.dart';
@@ -1049,6 +1050,21 @@ class _HomePageState extends State<HomePage> {
       _handleOpenExternalFile(
         event.params['path'] as String,
         event.params['mimeType'] as String?,
+      );
+    } else if (event.action == DebugAction.mirrorOpenSettings) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => const MirrorSettingsPage(),
+        ),
+      );
+    } else if (event.action == DebugAction.mirrorOpenWizard) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          fullscreenDialog: true,
+          builder: (_) => const MirrorWizardPage(),
+        ),
       );
     }
   }

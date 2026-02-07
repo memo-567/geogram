@@ -1310,6 +1310,11 @@ class LogApiService {
         return await _handleEmailAction(action.toLowerCase(), params, headers);
       }
 
+      // Handle profile debug actions
+      if (action.toLowerCase().startsWith('profile_')) {
+        return await _handleProfileAction(action.toLowerCase(), params, headers);
+      }
+
       // Handle mirror sync debug actions
       if (action.toLowerCase().startsWith('mirror_')) {
         return await _handleMirrorAction(action.toLowerCase(), params, headers);
@@ -14259,6 +14264,115 @@ ul, ol { margin-left: 30px; padding: 0; }
   }
 
   // ============================================================
+  // Debug API - Profile Actions
+  // ============================================================
+
+  /// Handle profile debug actions asynchronously
+  Future<shelf.Response> _handleProfileAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final profileService = ProfileService();
+
+      switch (action) {
+        case 'profile_list':
+          final profiles = profileService.getAllProfiles();
+          final activeId = profileService.activeProfileId;
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'active_profile_id': activeId,
+              'profiles': profiles.map((p) => {
+                'id': p.id,
+                'callsign': p.callsign,
+                'npub': p.npub,
+                'nickname': p.nickname,
+                'active': p.id == activeId,
+              }).toList(),
+            }),
+            headers: headers,
+          );
+
+        case 'profile_delete':
+          final callsign = params['callsign'] as String?;
+          if (callsign == null || callsign.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing callsign parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          final profiles = profileService.getAllProfiles();
+          final matchIndex = profiles.indexWhere(
+            (p) => p.callsign.toUpperCase() == callsign.toUpperCase(),
+          );
+          final profile = matchIndex >= 0 ? profiles[matchIndex] : null;
+
+          if (profile == null) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Profile not found for callsign: $callsign',
+                'available_callsigns': profiles.map((p) => p.callsign).toList(),
+              }),
+              headers: headers,
+            );
+          }
+
+          final deleted = await profileService.deleteProfile(profile.id);
+
+          if (!deleted) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Cannot delete profile (it may be the last one)',
+              }),
+              headers: headers,
+            );
+          }
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'deleted_callsign': callsign.toUpperCase(),
+              'message': 'Profile deleted',
+            }),
+            headers: headers,
+          );
+
+        default:
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'Unknown profile action: $action',
+              'available': [
+                'profile_list',
+                'profile_delete',
+              ],
+            }),
+            headers: headers,
+          );
+      }
+    } catch (e, stack) {
+      LogService().log('LogApiService: Profile action error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  // ============================================================
   // Debug API - Mirror Actions
   // ============================================================
 
@@ -14425,6 +14539,158 @@ ul, ol { margin-left: 30px; padding: 0; }
             headers: headers,
           );
 
+        case 'mirror_sync_all':
+          final configService = MirrorConfigService.instance;
+          final config = configService.config;
+          final peers = config?.peers ?? [];
+
+          if (peers.isEmpty) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': true,
+                'peers_synced': 0,
+                'peers_skipped': 0,
+                'total_added': 0,
+                'total_modified': 0,
+                'total_uploaded': 0,
+                'errors': 0,
+                'details': [],
+                'message': 'No peers configured',
+              }),
+              headers: headers,
+            );
+          }
+
+          var peersSynced = 0;
+          var peersSkipped = 0;
+          var totalAdded = 0;
+          var totalModified = 0;
+          var totalUploaded = 0;
+          var errors = 0;
+          final details = <Map<String, dynamic>>[];
+
+          for (final peer in peers) {
+            if (peer.addresses.isEmpty) {
+              peersSkipped++;
+              continue;
+            }
+            final peerUrl = 'http://${peer.addresses.first}';
+            final enabledApps = configService.getEnabledAppsForPeer(peer.peerId);
+
+            var peerHadSync = false;
+            for (final appId in enabledApps) {
+              final appConfig = peer.apps[appId];
+              if (appConfig == null) continue;
+              final style = appConfig.style;
+              if (style == SyncStyle.paused) continue;
+              try {
+                final result = await mirrorService.syncFolder(
+                  peerUrl,
+                  appId,
+                  peerCallsign: peer.callsign,
+                  syncStyle: style,
+                  ignorePatterns: appConfig.ignorePatterns,
+                );
+                final detail = <String, dynamic>{
+                  'peer': peer.callsign,
+                  'app': appId,
+                  'added': result.filesAdded,
+                  'modified': result.filesModified,
+                  'uploaded': result.filesUploaded,
+                };
+                if (!result.success) {
+                  detail['error'] = result.error;
+                  errors++;
+                } else {
+                  totalAdded += result.filesAdded;
+                  totalModified += result.filesModified;
+                  totalUploaded += result.filesUploaded;
+                  peerHadSync = true;
+                }
+                details.add(detail);
+              } catch (e) {
+                errors++;
+                details.add({
+                  'peer': peer.callsign,
+                  'app': appId,
+                  'error': e.toString(),
+                });
+              }
+            }
+
+            if (peerHadSync) peersSynced++;
+            await configService.markPeerSynced(peer.peerId);
+          }
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'peers_synced': peersSynced,
+              'peers_skipped': peersSkipped,
+              'total_added': totalAdded,
+              'total_modified': totalModified,
+              'total_uploaded': totalUploaded,
+              'errors': errors,
+              'details': details,
+            }),
+            headers: headers,
+          );
+
+        case 'mirror_config':
+          final configService = MirrorConfigService.instance;
+          final config = configService.config;
+
+          if (config == null) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': true,
+                'enabled': false,
+                'message': 'No mirror config loaded',
+              }),
+              headers: headers,
+            );
+          }
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'enabled': config.enabled,
+              'device_id': config.deviceId,
+              'device_name': config.deviceName,
+              'peers': config.peers.map((p) => {
+                'peer_id': p.peerId,
+                'callsign': p.callsign,
+                'addresses': p.addresses,
+                'apps': p.apps.map((k, v) => MapEntry(k, {
+                  'enabled': v.enabled,
+                  'style': v.style.name,
+                  'state': v.state.name,
+                })),
+              }).toList(),
+            }),
+            headers: headers,
+          );
+
+        case 'mirror_open_settings':
+          DebugController().triggerMirrorOpenSettings();
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Navigated to mirror settings',
+            }),
+            headers: headers,
+          );
+
+        case 'mirror_open_wizard':
+          DebugController().triggerMirrorOpenWizard();
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Navigated to mirror wizard',
+            }),
+            headers: headers,
+          );
+
         default:
           return shelf.Response.badRequest(
             body: jsonEncode({
@@ -14436,6 +14702,10 @@ ul, ol { margin-left: 30px; padding: 0; }
                 'mirror_get_status',
                 'mirror_add_allowed_peer',
                 'mirror_remove_allowed_peer',
+                'mirror_sync_all',
+                'mirror_config',
+                'mirror_open_settings',
+                'mirror_open_wizard',
               ],
             }),
             headers: headers,

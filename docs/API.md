@@ -3503,6 +3503,36 @@ curl -X POST http://localhost:3456/api/debug \
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action": "mirror_get_status"}'
+
+# Show mirror configuration (peers, apps, addresses)
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "mirror_config"}'
+
+# Full sync with all configured peers
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "mirror_sync_all"}'
+
+# Open Mirror Settings page on device
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "mirror_open_settings"}'
+
+# Open Mirror Wizard page on device
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "mirror_open_wizard"}'
+
+# List all profiles
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "profile_list"}'
+
+# Delete a profile by callsign
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "profile_delete", "callsign": "X1FART"}'
 ```
 
 ---

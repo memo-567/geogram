@@ -147,6 +147,12 @@ enum DebugAction {
   /// Remove an allowed peer
   mirrorRemoveAllowedPeer,
 
+  /// Open Mirror Settings page
+  mirrorOpenSettings,
+
+  /// Open Mirror Wizard page
+  mirrorOpenWizard,
+
   /// Open Flasher on Monitor tab (triggered by USB attachment)
   openFlasherMonitor,
 
@@ -182,6 +188,12 @@ enum DebugAction {
 
   /// Disable encrypted storage (extract to folders)
   encryptStorageDisable,
+
+  /// List all profiles
+  profileList,
+
+  /// Delete a profile by callsign
+  profileDelete,
 }
 
 /// Toast message to be displayed
@@ -504,6 +516,16 @@ class DebugController {
   /// Remove an allowed peer from mirror sync
   void triggerMirrorRemoveAllowedPeer({required String npub}) {
     triggerAction(DebugAction.mirrorRemoveAllowedPeer, params: {'npub': npub});
+  }
+
+  /// Trigger opening Mirror Settings page
+  void triggerMirrorOpenSettings() {
+    triggerAction(DebugAction.mirrorOpenSettings);
+  }
+
+  /// Trigger opening Mirror Wizard page
+  void triggerMirrorOpenWizard() {
+    triggerAction(DebugAction.mirrorOpenWizard);
   }
 
   /// Trigger opening Flasher on Monitor tab with optional auto-connect
@@ -868,6 +890,38 @@ class DebugController {
         'description': 'Remove an allowed sync peer',
         'params': {
           'npub': 'Peer NOSTR public key to remove (required)',
+        },
+      },
+      {
+        'action': 'mirror_sync_all',
+        'description': 'Full sync with all configured peers and enabled apps',
+        'params': {},
+      },
+      {
+        'action': 'mirror_config',
+        'description': 'Show current mirror configuration (peers, apps, addresses)',
+        'params': {},
+      },
+      {
+        'action': 'mirror_open_settings',
+        'description': 'Open Mirror Settings page on the device',
+        'params': {},
+      },
+      {
+        'action': 'mirror_open_wizard',
+        'description': 'Open Mirror Wizard page on the device',
+        'params': {},
+      },
+      {
+        'action': 'profile_list',
+        'description': 'List all profiles with their IDs and callsigns',
+        'params': {},
+      },
+      {
+        'action': 'profile_delete',
+        'description': 'Delete a profile by callsign',
+        'params': {
+          'callsign': 'Callsign of the profile to delete (required)',
         },
       },
       {
