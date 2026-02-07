@@ -17,7 +17,6 @@ import '../services/app_service.dart';
 import '../services/mirror_sync_service.dart';
 import '../services/profile_service.dart';
 import '../services/log_service.dart';
-import '../services/storage_config.dart';
 
 /// Wizard for pairing a new mirror device
 class MirrorWizardPage extends StatefulWidget {
@@ -84,27 +83,24 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
   }
 
   Future<void> _computeAppSizes() async {
-    final callsign = ProfileService().getProfile().callsign;
-    final callsignDir = StorageConfig().getCallsignDir(callsign);
+    final storage = AppService().profileStorage;
+    if (storage == null) return;
 
     for (final app in _availableApps) {
-      final appDir = Directory('$callsignDir/${app.id}');
-      if (await appDir.exists()) {
-        int size = 0;
-        try {
-          await for (final entity in appDir.list(recursive: true, followLinks: false)) {
-            if (entity is File) {
-              try {
-                size += await entity.length();
-              } catch (_) {}
-            }
+      if (!await storage.directoryExists(app.id)) continue;
+      int size = 0;
+      try {
+        final entries = await storage.listDirectory(app.id, recursive: true);
+        for (final entry in entries) {
+          if (!entry.isDirectory && entry.size != null) {
+            size += entry.size!;
           }
-        } catch (_) {}
-        if (mounted) {
-          setState(() {
-            _appSizes[app.id] = size;
-          });
         }
+      } catch (_) {}
+      if (mounted) {
+        setState(() {
+          _appSizes[app.id] = size;
+        });
       }
     }
   }

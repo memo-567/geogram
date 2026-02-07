@@ -12,6 +12,7 @@ import '../services/app_service.dart';
 import '../services/encrypted_storage_service.dart';
 import '../services/storage_config.dart';
 import '../services/signing_service.dart';
+import '../services/mirror_config_service.dart';
 import '../services/app_args.dart';
 import '../util/event_bus.dart';
 import '../util/nostr_key_generator.dart';
@@ -413,6 +414,9 @@ class ProfileService {
     }
     await AppService().setActiveCallsign(newProfile.callsign);
 
+    // Update mirror config to use this profile's storage
+    MirrorConfigService.instance.setStorage(AppService().profileStorage);
+
     // Switch logs to profile-specific directory
     await LogService().switchToProfile(newProfile.callsign);
 
@@ -686,6 +690,9 @@ class ProfileService {
         AppService().setNsec(profile.nsec);
       }
       await AppService().setActiveCallsign(profile.callsign);
+
+      // Update mirror config to use this profile's storage
+      MirrorConfigService.instance.setStorage(AppService().profileStorage);
 
       // Switch logs to profile-specific directory
       await LogService().switchToProfile(profile.callsign);

@@ -1,6 +1,7 @@
 /// Service for managing mirror configuration persistence.
 ///
 /// Handles loading, saving, and streaming mirror config changes.
+/// Config is stored per-profile inside `mirror/config.json` via ProfileStorage.
 library;
 
 import 'dart:async';
@@ -10,7 +11,11 @@ import 'dart:io';
 import 'package:uuid/uuid.dart';
 
 import '../models/mirror_config.dart';
+import 'profile_storage.dart';
 import 'storage_config.dart';
+
+/// Relative path for mirror config inside a profile's storage.
+const _mirrorConfigPath = 'mirror/config.json';
 
 /// Service for managing mirror sync configuration
 class MirrorConfigService {
@@ -20,6 +25,7 @@ class MirrorConfigService {
   MirrorConfigService._();
 
   MirrorConfig? _config;
+  ProfileStorage? _storage;
   final _configController = StreamController<MirrorConfig>.broadcast();
 
   /// Stream of config changes
@@ -31,10 +37,13 @@ class MirrorConfigService {
   /// Check if mirror is enabled
   bool get isEnabled => _config?.enabled ?? false;
 
-  /// Get config file path
-  String get _configPath {
-    final basePath = StorageConfig().baseDir;
-    return '$basePath/mirror_config.json';
+  /// Set the ProfileStorage instance for the current profile.
+  ///
+  /// Clears the cached config so the next [loadConfig] reads from the
+  /// new profile's storage.
+  void setStorage(ProfileStorage? storage) {
+    _storage = storage;
+    _config = null; // force reload for new profile
   }
 
   /// Initialize the service
@@ -42,23 +51,44 @@ class MirrorConfigService {
     await loadConfig();
   }
 
-  /// Load config from disk
+  /// Load config from ProfileStorage.
+  ///
+  /// Falls back to migrating the legacy global `mirror_config.json` when
+  /// the per-profile config does not exist yet.
   Future<MirrorConfig> loadConfig() async {
-    final file = File(_configPath);
-
-    if (await file.exists()) {
+    if (_storage != null) {
       try {
-        final content = await file.readAsString();
-        final json = jsonDecode(content) as Map<String, dynamic>;
-        _config = MirrorConfig.fromJson(json);
+        final json = await _storage!.readJson(_mirrorConfigPath);
+        if (json != null) {
+          _config = MirrorConfig.fromJson(json);
+          _configController.add(_config!);
+          return _config!;
+        }
       } catch (e) {
-        print('Error loading mirror config: $e');
-        _config = _createDefaultConfig();
+        print('Error loading mirror config from storage: $e');
       }
-    } else {
-      _config = _createDefaultConfig();
+
+      // Try migrating legacy global config
+      try {
+        final legacyPath = '${StorageConfig().baseDir}/mirror_config.json';
+        final legacyFile = File(legacyPath);
+        if (await legacyFile.exists()) {
+          final content = await legacyFile.readAsString();
+          final legacyJson = jsonDecode(content) as Map<String, dynamic>;
+          _config = MirrorConfig.fromJson(legacyJson);
+          // Save into per-profile storage
+          await _storage!.writeJson(_mirrorConfigPath, _config!.toJson());
+          // Remove legacy file so it won't be picked up again
+          await legacyFile.delete();
+          _configController.add(_config!);
+          return _config!;
+        }
+      } catch (e) {
+        print('Error migrating legacy mirror config: $e');
+      }
     }
 
+    _config = _createDefaultConfig();
     _configController.add(_config!);
     return _config!;
   }
@@ -85,15 +115,13 @@ class MirrorConfigService {
     return 'My Device';
   }
 
-  /// Save config to disk
+  /// Save config to ProfileStorage
   Future<void> saveConfig(MirrorConfig config) async {
     _config = config;
 
-    final file = File(_configPath);
-    await file.parent.create(recursive: true);
-
-    final content = const JsonEncoder.withIndent('  ').convert(config.toJson());
-    await file.writeAsString(content);
+    if (_storage != null) {
+      await _storage!.writeJson(_mirrorConfigPath, config.toJson());
+    }
 
     _configController.add(config);
   }
