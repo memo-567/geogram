@@ -1142,6 +1142,17 @@ class FileFolderPickerState extends State<FileFolderPicker> {
                         fontWeight: isCurrentRoot ? FontWeight.w600 : null,
                       ),
                     ),
+                    if (widget.profileStorage?.isEncrypted == true &&
+                        location.path == widget.profileStorage!.basePath) ...[
+                      const SizedBox(width: 6),
+                      Icon(
+                        Icons.lock_rounded,
+                        size: 14,
+                        color: isCurrentRoot
+                            ? theme.colorScheme.onPrimaryContainer
+                            : theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ],
                   ],
                 ),
               ),
