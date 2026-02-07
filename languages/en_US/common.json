@@ -850,6 +850,7 @@
   "comment_information": "Comment Information",
   "npub": "npub",
   "signature": "Signature",
+  "blog_post": "Blog Post",
   "new_blog_post": "New Blog Post",
   "title_required_field": "Title *",
   "enter_post_title": "Enter post title",

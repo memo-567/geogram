@@ -763,6 +763,7 @@
   "comment_information": "Informação do Comentário",
   "npub": "npub",
   "signature": "Assinatura",
+  "blog_post": "Publicação de Blog",
   "new_blog_post": "Nova Publicação de Blog",
   "title_required_field": "Título *",
   "enter_post_title": "Introduza o título da publicação",
