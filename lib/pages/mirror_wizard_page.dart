@@ -1001,8 +1001,10 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
       await _configService.setEnabled(true);
     }
 
-    // 4. Initial sync — push local data to the new peer
-    final storage = AppService().profileStorage;
+    // 4. Initial sync — push local data to the new peer.
+    // Don't pass active profile's storage — syncFolder uses callsignDir
+    // (derived from peerCallsign) for filesystem operations, which correctly
+    // targets the peer's callsign folder even when the active profile differs.
     for (final appId in selectedAppIds) {
       final style = _appStyles[appId] ?? SyncStyle.sendReceive;
       if (style != SyncStyle.paused) {
@@ -1014,7 +1016,6 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
             peerCallsign: remoteCallsign,
             syncStyle: style,
             ignorePatterns: appConfig?.ignorePatterns ?? const [],
-            storage: storage,
           );
         } catch (e) {
           LogService().log('MirrorWizard: Initial sync failed for $appId: $e');

@@ -11,6 +11,7 @@ import 'dart:io';
 import 'package:uuid/uuid.dart';
 
 import '../models/mirror_config.dart';
+import 'log_service.dart';
 import 'profile_storage.dart';
 import 'storage_config.dart';
 
@@ -123,6 +124,11 @@ class MirrorConfigService {
 
     if (_storage != null) {
       await _storage!.writeJson(_mirrorConfigPath, config.toJson());
+    } else {
+      LogService().log(
+        'MirrorConfigService: WARNING — saveConfig called but _storage is null. '
+        'Config NOT persisted to disk (will be lost on restart).',
+      );
     }
 
     _configController.add(config);

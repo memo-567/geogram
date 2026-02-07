@@ -7,9 +7,117 @@ import 'package:flutter/material.dart';
 
 import '../models/mirror_config.dart';
 import '../services/mirror_config_service.dart';
-import '../services/app_service.dart';
 import '../services/mirror_sync_service.dart';
+import '../widgets/transfer/transfer_progress_widget.dart';
 import 'mirror_wizard_page.dart';
+
+/// Opens a non-dismissible modal dialog that displays real-time sync progress.
+///
+/// Returns a record with:
+/// - `onProgress`: callback to feed [SyncStatus] updates into the dialog
+/// - `close`: callback to dismiss the dialog when sync is done
+({void Function(SyncStatus) onProgress, VoidCallback close})
+    _showSyncProgressDialog(BuildContext context, {String? peerName}) {
+  SyncStatus status = SyncStatus.idle();
+  late StateSetter dialogSetState;
+
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (dialogContext) {
+      return StatefulBuilder(
+        builder: (context, setState) {
+          dialogSetState = setState;
+
+          String phaseLabel;
+          switch (status.state) {
+            case 'requesting':
+              phaseLabel = 'Requesting permission...';
+              break;
+            case 'fetching_manifest':
+              phaseLabel = 'Fetching file list...';
+              break;
+            case 'syncing':
+              phaseLabel = 'Syncing files';
+              break;
+            case 'done':
+              phaseLabel = 'Complete';
+              break;
+            case 'error':
+              phaseLabel = 'Error';
+              break;
+            default:
+              phaseLabel = 'Preparing...';
+          }
+
+          return AlertDialog(
+            title: Text(peerName != null
+                ? 'Syncing with $peerName...'
+                : 'Syncing...'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(phaseLabel,
+                    style: Theme.of(context).textTheme.bodyMedium),
+                if (status.state == 'syncing' &&
+                    status.currentFile != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    status.currentFile!.length > 40
+                        ? '...${status.currentFile!.substring(status.currentFile!.length - 37)}'
+                        : status.currentFile!,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.outline,
+                          fontFamily: 'monospace',
+                        ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+                if (status.totalFiles > 0) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    '${status.filesProcessed} / ${status.totalFiles} files',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+                const SizedBox(height: 12),
+                if (status.totalBytes > 0)
+                  TransferProgressWidget(
+                    bytesTransferred: status.bytesTransferred,
+                    totalBytes: status.totalBytes,
+                    showSpeed: false,
+                    showEta: false,
+                  )
+                else
+                  const LinearProgressIndicator(),
+              ],
+            ),
+          );
+        },
+      );
+    },
+  );
+
+  return (
+    onProgress: (SyncStatus s) {
+      // Guard: dialogSetState may not be initialized yet on very fast first
+      // callback; the StatefulBuilder builder will pick up the latest status.
+      status = s;
+      try {
+        dialogSetState(() {});
+      } catch (_) {
+        // Dialog already dismissed or not yet built — ignore.
+      }
+    },
+    close: () {
+      if (Navigator.of(context, rootNavigator: true).canPop()) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+    },
+  );
+}
 
 /// Settings page for mirror sync configuration
 class MirrorSettingsPage extends StatefulWidget {
@@ -602,9 +710,7 @@ class _MirrorSettingsPageState extends State<MirrorSettingsPage> {
     final peers = _config?.peers ?? [];
     if (peers.isEmpty) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Syncing all peers...')),
-    );
+    final dialog = _showSyncProgressDialog(context);
 
     final syncService = MirrorSyncService.instance;
     var totalAdded = 0;
@@ -633,7 +739,9 @@ class _MirrorSettingsPageState extends State<MirrorSettingsPage> {
             peerCallsign: peer.callsign,
             syncStyle: style,
             ignorePatterns: appConfig.ignorePatterns,
-            storage: AppService().profileStorage,
+            onProgress: dialog.onProgress,
+            // Don't pass active profile's storage — syncFolder uses
+            // callsignDir (derived from peerCallsign) for filesystem ops.
           );
           if (result.success) {
             totalAdded += result.filesAdded;
@@ -649,6 +757,8 @@ class _MirrorSettingsPageState extends State<MirrorSettingsPage> {
 
       await _configService.markPeerSynced(peer.peerId);
     }
+
+    dialog.close();
 
     if (mounted) {
       final parts = <String>[];
@@ -1137,9 +1247,8 @@ class _PeerSettingsPageState extends State<PeerSettingsPage> {
       return;
     }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Syncing with ${_peer.name}...')),
-    );
+    final dialog =
+        _showSyncProgressDialog(context, peerName: _peer.name);
 
     final peerUrl = 'http://${_peer.addresses.first}';
     final syncService = MirrorSyncService.instance;
@@ -1161,7 +1270,7 @@ class _PeerSettingsPageState extends State<PeerSettingsPage> {
           peerCallsign: _peer.callsign,
           syncStyle: style,
           ignorePatterns: appConfig.ignorePatterns,
-          storage: AppService().profileStorage,
+          onProgress: dialog.onProgress,
         );
         if (result.success) {
           totalAdded += result.filesAdded;
@@ -1174,6 +1283,8 @@ class _PeerSettingsPageState extends State<PeerSettingsPage> {
         errors++;
       }
     }
+
+    dialog.close();
 
     await _configService.markPeerSynced(_peer.peerId);
 

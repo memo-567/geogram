@@ -20,7 +20,6 @@ import 'package:uuid/uuid.dart';
 
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
-import 'app_service.dart';
 import 'log_service.dart';
 import 'mirror_config_service.dart';
 import 'profile_service.dart';
@@ -537,17 +536,10 @@ class MirrorSyncService {
     _activeChallenges.remove(nonce);
     LogService().log('MirrorSync: Challenge verified for $peerCallsign');
 
-    // 5. Check if folder exists (use callsign dir, not base dir)
-    final callsign = ProfileService().getProfile().callsign;
-    final callsignDir = StorageConfig().getCallsignDir(callsign);
+    // 5. Check if folder exists under the shared callsign directory
+    final callsignDir = StorageConfig().getCallsignDir(peerCallsign);
     final folderPath = '$callsignDir/$folder';
-    final profileStorage = AppService().profileStorage;
-    bool folderExists;
-    if (profileStorage != null) {
-      folderExists = await profileStorage.exists(folder);
-    } else {
-      folderExists = await Directory(folderPath).exists();
-    }
+    final folderExists = await Directory(folderPath).exists();
     if (!folderExists) {
       return (
         allowed: false,
@@ -580,15 +572,20 @@ class MirrorSyncService {
     );
   }
 
-  /// Validate a token and return the associated folder
-  String? validateToken(String token) {
+  /// Validate a token and return the associated folder and peer callsign.
+  ///
+  /// The [peerCallsign] is the shared callsign for mirror sync — it tells
+  /// server handlers which callsign directory to read from / write to,
+  /// instead of blindly using the active profile's callsign.
+  ({String folder, String peerCallsign})? validateToken(String? token) {
+    if (token == null) return null;
     final accessToken = _activeTokens[token];
     if (accessToken == null) return null;
     if (accessToken.isExpired) {
       _activeTokens.remove(token);
       return null;
     }
-    return accessToken.folder;
+    return (folder: accessToken.folder, peerCallsign: accessToken.peerCallsign);
   }
 
   /// Generate manifest for a folder

@@ -13133,22 +13133,8 @@ ul, ol { margin-left: 30px; padding: 0; }
         );
       }
 
-      // Check if folder exists before generating challenge
-      final callsign = ProfileService().getProfile().callsign;
-      final callsignDir = StorageConfig().getCallsignDir(callsign);
-      final folderPath = '$callsignDir/$folder';
-
-      final dir = io.Directory(folderPath);
-      if (!await dir.exists()) {
-        return shelf.Response.notFound(
-          jsonEncode({
-            'success': false,
-            'error': 'Folder not found',
-            'code': 'FOLDER_NOT_FOUND',
-          }),
-          headers: headers,
-        );
-      }
+      // Folder existence is verified later in verifyRequest() using the
+      // correct peer callsign (not the active profile's callsign).
 
       // Generate challenge
       final mirrorService = MirrorSyncService.instance;
@@ -13303,9 +13289,9 @@ ul, ol { margin-left: 30px; padding: 0; }
 
       // Validate token
       final mirrorService = MirrorSyncService.instance;
-      final validatedFolder = mirrorService.validateToken(token);
+      final tokenData = mirrorService.validateToken(token);
 
-      if (validatedFolder == null) {
+      if (tokenData == null) {
         return shelf.Response(
           401,
           body: jsonEncode({
@@ -13318,7 +13304,7 @@ ul, ol { margin-left: 30px; padding: 0; }
       }
 
       // Verify requested folder matches token's folder
-      if (validatedFolder != folder) {
+      if (tokenData.folder != folder) {
         return shelf.Response(
           403,
           body: jsonEncode({
@@ -13330,19 +13316,13 @@ ul, ol { margin-left: 30px; padding: 0; }
         );
       }
 
-      // Generate manifest
-      final callsign = ProfileService().getProfile().callsign;
-      final callsignDir = StorageConfig().getCallsignDir(callsign);
+      // Use the shared callsign from the token — NOT the active profile,
+      // because the active profile may differ from the mirrored callsign.
+      final callsignDir = StorageConfig().getCallsignDir(tokenData.peerCallsign);
       final folderPath = '$callsignDir/$folder';
-      final profileStorage = AppService().profileStorage;
 
-      // Check if folder exists (either on disk or in encrypted storage)
-      bool folderExists;
-      if (profileStorage != null) {
-        folderExists = await profileStorage.directoryExists(folder);
-      } else {
-        folderExists = await io.Directory(folderPath).exists();
-      }
+      // Check if folder exists on disk
+      final folderExists = await io.Directory(folderPath).exists();
 
       if (!folderExists) {
         return shelf.Response.notFound(
@@ -13357,7 +13337,6 @@ ul, ol { margin-left: 30px; padding: 0; }
 
       final manifest = await mirrorService.generateManifest(
         folderPath,
-        storage: profileStorage,
       );
 
       return shelf.Response.ok(
@@ -13417,9 +13396,9 @@ ul, ol { margin-left: 30px; padding: 0; }
 
       // Validate token
       final mirrorService = MirrorSyncService.instance;
-      final folder = mirrorService.validateToken(token);
+      final tokenData = mirrorService.validateToken(token);
 
-      if (folder == null) {
+      if (tokenData == null) {
         return shelf.Response(
           401,
           body: jsonEncode({
@@ -13431,9 +13410,10 @@ ul, ol { margin-left: 30px; padding: 0; }
         );
       }
 
-      // Construct full path
-      final callsign = ProfileService().getProfile().callsign;
-      final callsignDir = StorageConfig().getCallsignDir(callsign);
+      final folder = tokenData.folder;
+
+      // Use the shared callsign from the token — NOT the active profile.
+      final callsignDir = StorageConfig().getCallsignDir(tokenData.peerCallsign);
       final folderPath = '$callsignDir/$folder';
       final fullPath = '$folderPath/$filePath';
 
@@ -13451,36 +13431,20 @@ ul, ol { margin-left: 30px; padding: 0; }
         );
       }
 
-      // Read file via ProfileStorage or filesystem
-      final profileStorage = AppService().profileStorage;
+      // Read file from the peer callsign's folder on disk
       Uint8List bytes;
-      if (profileStorage != null) {
-        final data = await profileStorage.readBytes('$folder/$filePath');
-        if (data == null) {
-          return shelf.Response.notFound(
-            jsonEncode({
-              'success': false,
-              'error': 'File not found',
-              'code': 'FILE_NOT_FOUND',
-            }),
-            headers: headers,
-          );
-        }
-        bytes = data;
-      } else {
-        final file = io.File(fullPath);
-        if (!await file.exists()) {
-          return shelf.Response.notFound(
-            jsonEncode({
-              'success': false,
-              'error': 'File not found',
-              'code': 'FILE_NOT_FOUND',
-            }),
-            headers: headers,
-          );
-        }
-        bytes = await file.readAsBytes();
+      final file = io.File(fullPath);
+      if (!await file.exists()) {
+        return shelf.Response.notFound(
+          jsonEncode({
+            'success': false,
+            'error': 'File not found',
+            'code': 'FILE_NOT_FOUND',
+          }),
+          headers: headers,
+        );
       }
+      bytes = await file.readAsBytes();
 
       // Compute SHA1
       final sha1Hash = sha1.convert(bytes).toString();
@@ -13581,9 +13545,9 @@ ul, ol { margin-left: 30px; padding: 0; }
 
       // Validate token
       final mirrorService = MirrorSyncService.instance;
-      final folder = mirrorService.validateToken(token);
+      final tokenData = mirrorService.validateToken(token);
 
-      if (folder == null) {
+      if (tokenData == null) {
         return shelf.Response(
           401,
           body: jsonEncode({
@@ -13595,9 +13559,10 @@ ul, ol { margin-left: 30px; padding: 0; }
         );
       }
 
-      // Construct full path
-      final callsign = ProfileService().getProfile().callsign;
-      final callsignDir = StorageConfig().getCallsignDir(callsign);
+      final folder = tokenData.folder;
+
+      // Use the shared callsign from the token — NOT the active profile.
+      final callsignDir = StorageConfig().getCallsignDir(tokenData.peerCallsign);
       final folderPath = '$callsignDir/$folder';
       final fullPath = '$folderPath/$filePath';
 
@@ -13635,15 +13600,10 @@ ul, ol { margin-left: 30px; padding: 0; }
         }
       }
 
-      // Write file via ProfileStorage or filesystem
-      final profileStorage = AppService().profileStorage;
-      if (profileStorage != null) {
-        await profileStorage.writeBytes('$folder/$filePath', bodyBytes);
-      } else {
-        final file = io.File(fullPath);
-        await file.parent.create(recursive: true);
-        await file.writeAsBytes(bodyBytes);
-      }
+      // Write file to the peer callsign's folder on disk
+      final file = io.File(fullPath);
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(bodyBytes);
 
       return shelf.Response.ok(
         jsonEncode({
