@@ -222,10 +222,33 @@ class _FilesBrowserPageState extends State<FilesBrowserPage> {
     final ext = p.extension(path).toLowerCase().replaceFirst('.', '');
 
     if (_imageExtensions.contains(ext)) {
+      // Collect sibling images in the same folder for swipe navigation
+      final dir = Directory(p.dirname(path));
+      List<String> siblings;
+      int index;
+      try {
+        siblings = dir.listSync()
+            .whereType<File>()
+            .where((f) {
+              final e = p.extension(f.path).toLowerCase().replaceFirst('.', '');
+              return _imageExtensions.contains(e);
+            })
+            .map((f) => f.path)
+            .toList()
+          ..sort((a, b) => p.basename(a).toLowerCase().compareTo(
+              p.basename(b).toLowerCase()));
+        index = siblings.indexOf(path).clamp(0, siblings.length - 1);
+      } catch (_) {
+        siblings = [path];
+        index = 0;
+      }
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => PhotoViewerPage(imagePaths: [path]),
+          builder: (_) => PhotoViewerPage(
+            imagePaths: siblings,
+            initialIndex: index,
+          ),
         ),
       );
     } else if (ext == 'pdf') {

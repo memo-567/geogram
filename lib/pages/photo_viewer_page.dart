@@ -235,9 +235,20 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
           icon: const Icon(Icons.close, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
-        title: Text(
-          '${_currentIndex + 1} / ${widget.imagePaths.length}',
-          style: const TextStyle(color: Colors.white),
+        title: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              path.basename(widget.imagePaths[_currentIndex]),
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+              overflow: TextOverflow.ellipsis,
+            ),
+            if (widget.imagePaths.length > 1)
+              Text(
+                '${_currentIndex + 1} / ${widget.imagePaths.length}',
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+          ],
         ),
         centerTitle: true,
         actions: [
@@ -308,8 +319,8 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
               ),
             ),
 
-          // Page indicator dots
-          if (widget.imagePaths.length > 1)
+          // Page indicator dots (only for small sets; counter in app bar handles large sets)
+          if (widget.imagePaths.length > 1 && widget.imagePaths.length <= 20)
             Positioned(
               left: 0,
               right: 0,
