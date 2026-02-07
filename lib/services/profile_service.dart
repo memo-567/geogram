@@ -419,6 +419,7 @@ class ProfileService {
     // the new profile's mirror config so listeners see correct state.
     MirrorSyncService.instance.resetForProfileSwitch();
     await MirrorConfigService.instance.setStorage(AppService().profileStorage);
+    MirrorSyncService.instance.loadAllowedPeersFromConfig();
 
     // Switch logs to profile-specific directory
     await LogService().switchToProfile(newProfile.callsign);
@@ -697,6 +698,7 @@ class ProfileService {
       // Clear stale mirror runtime state, then load new profile's config
       MirrorSyncService.instance.resetForProfileSwitch();
       await MirrorConfigService.instance.setStorage(AppService().profileStorage);
+      MirrorSyncService.instance.loadAllowedPeersFromConfig();
 
       // Switch logs to profile-specific directory
       await LogService().switchToProfile(profile.callsign);

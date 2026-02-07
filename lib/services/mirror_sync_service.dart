@@ -20,6 +20,7 @@ import 'package:uuid/uuid.dart';
 
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
+import 'app_service.dart';
 import 'log_service.dart';
 import 'mirror_config_service.dart';
 import 'profile_service.dart';
@@ -536,11 +537,18 @@ class MirrorSyncService {
     _activeChallenges.remove(nonce);
     LogService().log('MirrorSync: Challenge verified for $peerCallsign');
 
-    // 5. Check if folder exists
-    final basePath = StorageConfig().baseDir;
-    final folderPath = '$basePath/$folder';
-    final dir = Directory(folderPath);
-    if (!await dir.exists()) {
+    // 5. Check if folder exists (use callsign dir, not base dir)
+    final callsign = ProfileService().getProfile().callsign;
+    final callsignDir = StorageConfig().getCallsignDir(callsign);
+    final folderPath = '$callsignDir/$folder';
+    final profileStorage = AppService().profileStorage;
+    bool folderExists;
+    if (profileStorage != null) {
+      folderExists = await profileStorage.exists(folder);
+    } else {
+      folderExists = await Directory(folderPath).exists();
+    }
+    if (!folderExists) {
       return (
         allowed: false,
         token: null,

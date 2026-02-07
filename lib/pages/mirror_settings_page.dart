@@ -611,9 +611,13 @@ class _MirrorSettingsPageState extends State<MirrorSettingsPage> {
     var totalModified = 0;
     var totalUploaded = 0;
     var errors = 0;
+    var skipped = 0;
 
     for (final peer in peers) {
-      if (peer.addresses.isEmpty) continue;
+      if (peer.addresses.isEmpty) {
+        skipped++;
+        continue;
+      }
       final peerUrl = 'http://${peer.addresses.first}';
       final enabledApps = _configService.getEnabledAppsForPeer(peer.peerId);
 
@@ -651,6 +655,7 @@ class _MirrorSettingsPageState extends State<MirrorSettingsPage> {
       if (totalAdded > 0) parts.add('+$totalAdded new');
       if (totalModified > 0) parts.add('~$totalModified updated');
       if (totalUploaded > 0) parts.add('↑$totalUploaded uploaded');
+      if (skipped > 0) parts.add('$skipped peer(s) skipped — no address');
       final summary = parts.isEmpty ? 'No changes.' : parts.join(', ');
       final msg = errors > 0
           ? 'Sync done with $errors error(s). $summary'

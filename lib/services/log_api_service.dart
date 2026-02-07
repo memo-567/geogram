@@ -13678,7 +13678,7 @@ ul, ol { margin-left: 30px; padding: 0; }
       final peerCallsign = body['callsign'] as String?;
       final peerDeviceName = body['device_name'] as String?;
       final peerPlatform = body['platform'] as String?;
-      final peerAddress = body['address'] as String?;
+      var peerAddress = body['address'] as String?;
       final peerApps = (body['apps'] as List<dynamic>?)?.cast<String>() ?? [];
 
       if (peerNpub == null || peerNpub.isEmpty ||
@@ -13690,6 +13690,19 @@ ul, ol { margin-left: 30px; padding: 0; }
           }),
           headers: headers,
         );
+      }
+
+      // Extract client IP from shelf connection info as fallback address
+      if (peerAddress == null || peerAddress.isEmpty) {
+        final connInfo = request.context['shelf.io.connection_info']
+            as io.HttpConnectionInfo?;
+        if (connInfo != null) {
+          final clientIp = connInfo.remoteAddress.address;
+          // Use default mirror port since the peer didn't tell us theirs
+          peerAddress = '$clientIp:${AppArgs().port}';
+          LogService().log(
+              'LogApiService: Peer sent no address, using client IP: $peerAddress');
+        }
       }
 
       // 1. Register the remote peer as allowed to sync from us
@@ -13722,25 +13735,10 @@ ul, ol { margin-left: 30px; padding: 0; }
         await MirrorConfigService.instance.setEnabled(true);
       }
 
-      // 4. Create a local mirror profile for the peer's callsign (if it doesn't exist)
-      final existingProfile = ProfileService().getProfileByCallsign(peerCallsign);
-      if (existingProfile == null) {
-        final keys = NostrCrypto.generateKeyPair();
-        final mirrorProfile = await ProfileService().createNewProfileWithKeys(
-          npub: keys.npub,
-          nsec: keys.nsec,
-          callsign: peerCallsign,
-          nickname: 'Mirror of $peerCallsign',
-        );
-        await ProfileService().switchToProfile(mirrorProfile.id);
-      } else {
-        await ProfileService().switchToProfile(existingProfile.id);
-      }
-
-      // 5. Notify UI
+      // 4. Notify UI
       EventBus().fire(MirrorPairCompletedEvent(peerCallsign: peerCallsign));
 
-      // 6. Return our info so the requester can add us
+      // 5. Return our info so the requester can add us
       final profile = ProfileService().getProfile();
       final config = MirrorConfigService.instance.config;
 

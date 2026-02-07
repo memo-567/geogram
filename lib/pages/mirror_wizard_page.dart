@@ -12,6 +12,7 @@ import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
 
 import '../models/mirror_config.dart';
+import '../services/app_args.dart';
 import '../services/mirror_config_service.dart';
 import '../services/app_service.dart';
 import '../services/mirror_sync_service.dart';
@@ -951,6 +952,27 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
 
     // 1. POST /api/mirror/pair on remote to do reciprocal pairing
     try {
+      // Determine our own LAN address so the peer can reach us back
+      String? localAddress;
+      try {
+        final interfaces = await NetworkInterface.list(
+          type: InternetAddressType.IPv4,
+          includeLoopback: false,
+        );
+        for (final iface in interfaces) {
+          for (final addr in iface.addresses) {
+            if (!addr.isLoopback &&
+                (addr.address.startsWith('192.') ||
+                    addr.address.startsWith('10.') ||
+                    addr.address.startsWith('172.'))) {
+              localAddress = '${addr.address}:${AppArgs().port}';
+              break;
+            }
+          }
+          if (localAddress != null) break;
+        }
+      } catch (_) {}
+
       final response = await http.post(
         Uri.parse('$peerUrl/api/mirror/pair'),
         headers: {'Content-Type': 'application/json'},
@@ -959,7 +981,7 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
           'callsign': profile.callsign,
           'device_name': _configService.config?.deviceName ?? 'My Device',
           'platform': Platform.operatingSystem,
-          'address': null, // Remote will see us via the request
+          'address': localAddress,
           'apps': selectedAppIds,
         }),
       );
