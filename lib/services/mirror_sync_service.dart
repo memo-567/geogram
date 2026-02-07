@@ -359,6 +359,19 @@ class MirrorSyncService {
   /// Current sync status
   SyncStatus get status => _syncStatus;
 
+  /// Clear all per-profile runtime state during a profile switch.
+  ///
+  /// Must be called **before** [MirrorConfigService.setStorage] so that
+  /// stale peers/tokens from the old profile are gone before the new
+  /// config is loaded.
+  void resetForProfileSwitch() {
+    _allowedPeers.clear();
+    _activeTokens.clear();
+    _activeChallenges.clear();
+    _syncStatus = SyncStatus.idle();
+    _statusController.add(_syncStatus);
+  }
+
   /// Token validity duration (1 hour)
   static const _tokenDuration = Duration(hours: 1);
 

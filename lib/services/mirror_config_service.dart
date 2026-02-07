@@ -39,11 +39,13 @@ class MirrorConfigService {
 
   /// Set the ProfileStorage instance for the current profile.
   ///
-  /// Clears the cached config so the next [loadConfig] reads from the
-  /// new profile's storage.
-  void setStorage(ProfileStorage? storage) {
+  /// Clears the cached config and immediately loads the new profile's
+  /// config so that [isEnabled], [config], and stream listeners all
+  /// reflect the correct state right after a profile switch.
+  Future<void> setStorage(ProfileStorage? storage) async {
     _storage = storage;
     _config = null; // force reload for new profile
+    await loadConfig(); // loads from new storage, emits to stream
   }
 
   /// Initialize the service
