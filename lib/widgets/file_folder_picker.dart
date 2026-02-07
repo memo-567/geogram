@@ -186,6 +186,7 @@ class FileFolderPickerState extends State<FileFolderPicker> {
   final FileBrowserCacheService _cacheService = FileBrowserCacheService();
   bool _cacheInitialized = false;
   final FocusNode _keyboardFocusNode = FocusNode();
+  final ScrollController _breadcrumbScrollController = ScrollController();
   bool _isVirtualFolder = false;
   String? _virtualFolderType;
 
@@ -211,6 +212,7 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     // Flush any pending cache writes before disposing
     _cacheService.flush();
     _keyboardFocusNode.dispose();
+    _breadcrumbScrollController.dispose();
     super.dispose();
   }
 
@@ -1183,9 +1185,18 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     final parts = _currentDirectory.path.split(Platform.pathSeparator);
     if (parts.first.isEmpty) parts[0] = '/';
 
+    // Auto-scroll to show the last (deepest) folder
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_breadcrumbScrollController.hasClients) {
+        _breadcrumbScrollController.jumpTo(
+          _breadcrumbScrollController.position.maxScrollExtent,
+        );
+      }
+    });
+
     return SingleChildScrollView(
+      controller: _breadcrumbScrollController,
       scrollDirection: Axis.horizontal,
-      reverse: false,  // Left-align breadcrumb
       child: Row(
         children: [
           for (int i = 0; i < parts.length; i++) ...[
