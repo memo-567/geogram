@@ -1,0 +1,39 @@
+{
+  "version": "1.0",
+  "name": "Geogram Flasher Firmware Library",
+  "description": "Available firmware downloads for Geogram Flasher",
+  "updated_at": "2026-02-09T00:00:00Z",
+  "projects": [
+    {
+      "id": "geogram",
+      "name": "Geogram",
+      "description": "Geogram mesh communicator firmware",
+      "architectures": [
+        {
+          "id": "esp32",
+          "name": "ESP32",
+          "devices": [
+            {
+              "model": "esp32-c3-mini",
+              "chip": "ESP32-C3",
+              "title": "ESP32-C3-mini",
+              "description": "Compact ESP32-C3 development board with WiFi and BLE support. Features USB-C connector and onboard antenna.",
+              "path": "geogram/esp32/esp32-c3-mini/device.json",
+              "flash": {
+                "protocol": "esptool",
+                "baud_rate": 460800,
+                "firmware_url": "https://github.com/geograms/geogram/releases/latest/download/geogram-esp32-c3.bin"
+              },
+              "usb": {
+                "vid": "0x303A",
+                "pid": "0x1001"
+              },
+              "versions": [],
+              "latest_version": null
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
