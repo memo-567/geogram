@@ -220,9 +220,9 @@ class FlasherService {
       final firmwareTargetChip = EspToolProtocol.parseFirmwareTargetChip(firmwareData);
       if (detectedChip != null && firmwareTargetChip != null &&
           detectedChip != firmwareTargetChip) {
-        throw FlashException(
-          'Firmware is built for $firmwareTargetChip but the connected device '
-          'is $detectedChip. Flashing incompatible firmware would brick the device.',
+        throw ChipMismatchException(
+          firmwareChip: firmwareTargetChip,
+          detectedChip: detectedChip,
         );
       }
 

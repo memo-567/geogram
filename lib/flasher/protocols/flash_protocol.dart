@@ -102,3 +102,17 @@ class VerifyException extends FlashException {
   const VerifyException(String message, {int? errorCode})
       : super(message, phase: 'verify', errorCode: errorCode);
 }
+
+/// Chip mismatch exception — firmware target chip doesn't match hardware
+class ChipMismatchException extends FlashException {
+  final String firmwareChip;
+  final String detectedChip;
+
+  const ChipMismatchException({
+    required this.firmwareChip,
+    required this.detectedChip,
+  }) : super(
+    'Firmware is built for $firmwareChip but the connected device is $detectedChip',
+    phase: 'compatibility check',
+  );
+}

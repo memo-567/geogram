@@ -11,6 +11,7 @@ import 'package:file_picker/file_picker.dart';
 import '../models/device_definition.dart';
 import '../models/flash_progress.dart';
 import '../protocols/esptool_protocol.dart';
+import '../protocols/flash_protocol.dart';
 import '../serial/serial_port.dart';
 import '../services/flasher_service.dart';
 import '../widgets/add_firmware_wizard.dart';
@@ -407,6 +408,14 @@ class _FlasherPageState extends State<FlasherPage>
           });
         }
       }
+    } on ChipMismatchException catch (e) {
+      if (mounted) {
+        setState(() {
+          _flashProgress = FlashProgress.error(e.toString());
+          _isFlashing = false;
+        });
+        _showChipMismatchDialog(e.firmwareChip, e.detectedChip);
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -469,6 +478,8 @@ class _FlasherPageState extends State<FlasherPage>
             },
           );
           results[port.path] = true;
+        } on ChipMismatchException {
+          rethrow; // Let outer handler show dialog
         } catch (e) {
           results[port.path] = false;
           errors[port.path] = e.toString();
@@ -515,6 +526,13 @@ class _FlasherPageState extends State<FlasherPage>
           await Future.delayed(const Duration(milliseconds: 500));
           _monitorKey.currentState?.connect();
         }
+      }
+    } on ChipMismatchException catch (e) {
+      if (mounted) {
+        setState(() {
+          _isFlashing = false;
+        });
+        _showChipMismatchDialog(e.firmwareChip, e.detectedChip);
       }
     } finally {
       if (mounted) {
@@ -609,6 +627,77 @@ class _FlasherPageState extends State<FlasherPage>
         );
       }
     });
+  }
+
+  void _showChipMismatchDialog(String firmwareChip, String detectedChip) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 48),
+        title: const Text('Incompatible Firmware'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'The selected firmware was built for a different chip than '
+              'the one connected to your device.',
+            ),
+            const SizedBox(height: 16),
+            _chipInfoRow('Firmware target', firmwareChip, Colors.red),
+            const SizedBox(height: 8),
+            _chipInfoRow('Connected device', detectedChip, Colors.green),
+            const SizedBox(height: 16),
+            Text(
+              'Flashing incompatible firmware will not work and could leave '
+              'the device unresponsive. Please select a firmware file built '
+              'for $detectedChip.',
+              style: TextStyle(color: Colors.grey[700], fontSize: 13),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              _selectFirmware();
+            },
+            child: const Text('Browse for correct firmware'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _chipInfoRow(String label, String chip, Color color) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 130,
+          child: Text(label, style: const TextStyle(fontSize: 13)),
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: color.withValues(alpha: 0.3)),
+          ),
+          child: Text(
+            chip,
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: color,
+              fontFamily: 'monospace',
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   void _showError(String message) {
