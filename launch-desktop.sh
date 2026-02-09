@@ -34,8 +34,70 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Change to the geogram directory
 cd "$SCRIPT_DIR"
 
-# FVP cache directory
+# Native library cache directory (survives flutter clean)
+NATIVE_CACHE="linux/native-cache"
 FVP_CACHE="linux/fvp-cache"
+
+# ObjectBox library version and arch
+OBJECTBOX_VERSION="4.3.1"
+OBJECTBOX_ARCH="x64"
+OBJECTBOX_TARBALL="objectbox-linux-${OBJECTBOX_ARCH}.tar.gz"
+
+# Function to cache objectbox download after a successful build
+cache_objectbox() {
+    local build_type=$1
+    local src_dir="build/linux/x64/$build_type/_deps/objectbox-download-src"
+    local tarball="build/linux/x64/$build_type/_deps/objectbox-download-subbuild/objectbox-download-populate-prefix/src/$OBJECTBOX_TARBALL"
+
+    # Cache the extracted library
+    if [ -d "$src_dir/lib" ]; then
+        mkdir -p "$NATIVE_CACHE/objectbox"
+        if [ ! -d "$NATIVE_CACHE/objectbox/lib" ]; then
+            echo "📦 Caching ObjectBox library for offline builds..."
+            cp -r "$src_dir/." "$NATIVE_CACHE/objectbox/"
+        fi
+    fi
+
+    # Cache the tarball too (CMake FetchContent expects it)
+    if [ -f "$tarball" ] && [ -s "$tarball" ]; then
+        if [ ! -f "$NATIVE_CACHE/$OBJECTBOX_TARBALL" ]; then
+            cp "$tarball" "$NATIVE_CACHE/$OBJECTBOX_TARBALL"
+        fi
+    fi
+}
+
+# Function to restore objectbox into the build dir so CMake skips the download
+restore_objectbox() {
+    local build_type=$1
+    local src_dir="build/linux/x64/$build_type/_deps/objectbox-download-src"
+    local stamp_dir="build/linux/x64/$build_type/_deps/objectbox-download-subbuild/objectbox-download-populate-prefix/src/objectbox-download-populate-stamp"
+    local tarball_dst="build/linux/x64/$build_type/_deps/objectbox-download-subbuild/objectbox-download-populate-prefix/src/$OBJECTBOX_TARBALL"
+
+    # Skip if already populated
+    if [ -d "$src_dir/lib" ]; then
+        return
+    fi
+
+    # Restore from cache if available
+    if [ -d "$NATIVE_CACHE/objectbox/lib" ]; then
+        echo "📦 Restoring ObjectBox $build_type from cache (offline)..."
+        mkdir -p "$src_dir"
+        cp -r "$NATIVE_CACHE/objectbox/." "$src_dir/"
+
+        # Also restore the tarball so CMake's FetchContent considers it populated
+        if [ -f "$NATIVE_CACHE/$OBJECTBOX_TARBALL" ]; then
+            mkdir -p "$(dirname "$tarball_dst")"
+            cp "$NATIVE_CACHE/$OBJECTBOX_TARBALL" "$tarball_dst"
+        fi
+
+        # Create stamp files so CMake thinks the download already completed
+        mkdir -p "$stamp_dir"
+        touch "$stamp_dir/objectbox-download-populate-download"
+        touch "$stamp_dir/objectbox-download-populate-verify"
+        touch "$stamp_dir/objectbox-download-populate-extract"
+        touch "$stamp_dir/objectbox-download-populate-done"
+    fi
+}
 
 # Function to restore fvp cache if needed
 restore_fvp_if_needed() {
@@ -80,24 +142,44 @@ if ! "$FLUTTER_BIN" pub get --offline 2>/dev/null; then
     "$FLUTTER_BIN" pub get
 fi
 
-# Clean build to ensure fresh compilation
-echo "🧹 Cleaning previous build..."
-"$FLUTTER_BIN" clean
+# Only clean if explicitly requested via --clean flag
+if [[ " $* " == *" --clean "* ]]; then
+    echo "🧹 Cleaning previous build..."
+    # Cache native libs before cleaning
+    cache_objectbox "debug"
+    cache_objectbox "release"
+    cache_fvp "debug"
+    cache_fvp "release"
 
-# Re-fetch dependencies after clean
-echo "📦 Re-fetching dependencies..."
-"$FLUTTER_BIN" pub get --offline 2>/dev/null || "$FLUTTER_BIN" pub get
+    "$FLUTTER_BIN" clean
 
-# Restore fvp cache if available
+    # Re-fetch dependencies after clean
+    echo "📦 Re-fetching dependencies..."
+    "$FLUTTER_BIN" pub get --offline 2>/dev/null || "$FLUTTER_BIN" pub get
+fi
+
+# Restore cached native libraries
+restore_objectbox "debug"
+restore_objectbox "release"
 restore_fvp_if_needed "debug"
 restore_fvp_if_needed "release"
 
 echo ""
 echo "▶️  Starting app..."
 
-# Run the app on Linux desktop
-"$FLUTTER_BIN" run -d linux --no-pub "$@"
+# Filter out our custom flags before passing to flutter
+FLUTTER_ARGS=()
+for arg in "$@"; do
+    if [ "$arg" != "--clean" ]; then
+        FLUTTER_ARGS+=("$arg")
+    fi
+done
 
-# Cache fvp builds after successful run
+# Run the app on Linux desktop
+"$FLUTTER_BIN" run -d linux --no-pub "${FLUTTER_ARGS[@]}"
+
+# Cache native libs after successful run
+cache_objectbox "debug"
+cache_objectbox "release"
 cache_fvp "debug"
 cache_fvp "release"

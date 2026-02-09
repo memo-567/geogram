@@ -86,6 +86,7 @@ geogram-cli/.packages
 geogram-cli/pubspec.lock
 geogram-cli/build/
 linux/fvp-cache/
+linux/native-cache/
 .task
 
 # Java heap dumps
