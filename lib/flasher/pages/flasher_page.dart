@@ -278,10 +278,8 @@ class _FlasherPageState extends State<FlasherPage>
   }
 
   Future<void> _startFlash() async {
-    if (_selectedDevice == null) {
-      _showError('Please select a firmware from the Library');
-      return;
-    }
+    // Fall back to generic ESP32 when using custom firmware via Browse
+    final device = _selectedDevice ?? DeviceDefinition.genericEsp32();
 
     // Get the list of ports to flash
     final portsToFlash = _selectedPorts.isNotEmpty
@@ -295,7 +293,7 @@ class _FlasherPageState extends State<FlasherPage>
 
     // Need either firmware file, local version, or URL
     final hasLocalVersion = _selectedVersion != null;
-    final hasFirmwareUrl = _selectedDevice!.flash.firmwareUrl != null;
+    final hasFirmwareUrl = device.flash.firmwareUrl != null;
     if (_firmwarePath == null && !hasLocalVersion && !hasFirmwareUrl) {
       _showError('No firmware available for this device');
       return;
@@ -330,7 +328,7 @@ class _FlasherPageState extends State<FlasherPage>
     String? firmwarePath = _firmwarePath;
     if (firmwarePath == null && _selectedVersion != null) {
       // Use local version path
-      final basePath = _selectedDevice!.basePath;
+      final basePath = device.basePath;
       if (basePath != null) {
         firmwarePath = '$basePath/${_selectedVersion!.firmwarePath}';
       }
@@ -338,19 +336,19 @@ class _FlasherPageState extends State<FlasherPage>
 
     if (isMultiFlash) {
       // Flash multiple devices in parallel
-      await _flashMultipleDevices(portsToFlash, firmwarePath);
+      await _flashMultipleDevices(portsToFlash, firmwarePath, device);
     } else {
       // Flash single device
-      await _flashSingleDevice(portsToFlash.first, firmwarePath);
+      await _flashSingleDevice(portsToFlash.first, firmwarePath, device);
     }
   }
 
-  Future<void> _flashSingleDevice(PortInfo port, String? firmwarePath) async {
+  Future<void> _flashSingleDevice(PortInfo port, String? firmwarePath, DeviceDefinition device) async {
     FlashStatus? previousStatus;
 
     try {
       await _flasherService.flashDevice(
-        device: _selectedDevice!,
+        device: device,
         portPath: port.path,
         firmwarePath: firmwarePath,
         onProgress: (progress) {
@@ -410,6 +408,7 @@ class _FlasherPageState extends State<FlasherPage>
   Future<void> _flashMultipleDevices(
     List<PortInfo> ports,
     String? firmwarePath,
+    DeviceDefinition device,
   ) async {
     // Track results
     final results = <String, bool>{};
@@ -422,7 +421,7 @@ class _FlasherPageState extends State<FlasherPage>
       final futures = ports.map((port) async {
         try {
           await _flasherService.flashDevice(
-            device: _selectedDevice!,
+            device: device,
             portPath: port.path,
             firmwarePath: firmwarePath,
             onProgress: (progress) {
@@ -748,7 +747,7 @@ class _FlasherPageState extends State<FlasherPage>
           Center(
             child: ElevatedButton.icon(
               onPressed: _isFlashing ||
-                      _selectedDevice == null ||
+                      (_selectedDevice == null && _firmwarePath == null) ||
                       (_selectedPorts.isEmpty && _selectedPort == null)
                   ? null
                   : _startFlash,

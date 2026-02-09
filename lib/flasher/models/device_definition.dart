@@ -286,6 +286,20 @@ class DeviceDefinition {
     this.selectedVersion,
   });
 
+  /// Create a generic ESP32 device definition for custom firmware flashing
+  factory DeviceDefinition.genericEsp32() {
+    return DeviceDefinition(
+      id: 'generic-esp32',
+      family: 'esp32',
+      chip: 'ESP32',
+      title: 'Generic ESP32',
+      description: 'Generic ESP32 device for custom firmware',
+      flash: const FlashConfig(protocol: 'esptool'),
+      createdAt: '',
+      modifiedAt: '',
+    );
+  }
+
   /// Get effective model ID (new or legacy)
   String get effectiveModel => model ?? id;
 
