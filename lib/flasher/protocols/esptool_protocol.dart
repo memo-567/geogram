@@ -64,6 +64,30 @@ class EspToolProtocol implements FlashProtocol {
     0x6F51306F: 'ESP32-C2',
   };
 
+  // ESP-IDF firmware binary header chip IDs (at offset 12, 16-bit LE)
+  static const Map<int, String> firmwareChipIds = {
+    0x0000: 'ESP32',
+    0x0002: 'ESP32-S2',
+    0x0005: 'ESP32-C3',
+    0x0009: 'ESP32-S3',
+    0x000C: 'ESP32-C2',
+    0x000D: 'ESP32-C6',
+    0x0010: 'ESP32-H2',
+  };
+
+  /// Parse an ESP-IDF firmware binary header and return the target chip name.
+  ///
+  /// Returns null if the binary is too short or doesn't have a valid ESP-IDF header.
+  static String? parseFirmwareTargetChip(Uint8List firmware) {
+    // ESP-IDF image header: magic byte 0xE9 at offset 0
+    // Extended header starts at offset 8, chip_id is at offset 12 (16-bit LE)
+    if (firmware.length < 14) return null;
+    if (firmware[0] != 0xE9) return null;
+
+    final chipId = firmware[12] | (firmware[13] << 8);
+    return firmwareChipIds[chipId];
+  }
+
   // Register addresses
   static const int chipDetectMagicReg = 0x40001000;
 

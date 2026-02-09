@@ -4,11 +4,13 @@
  */
 
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 
 import '../models/device_definition.dart';
 import '../models/flash_progress.dart';
+import '../protocols/esptool_protocol.dart';
 import '../serial/serial_port.dart';
 import '../services/flasher_service.dart';
 import '../widgets/add_firmware_wizard.dart';
@@ -58,6 +60,7 @@ class _FlasherPageState extends State<FlasherPage>
   PortInfo? _selectedPort;
   List<PortInfo> _selectedPorts = [];
   String? _firmwarePath;
+  String? _firmwareTargetChip; // Detected from binary header
 
   // Multi-flash progress tracking
   Map<String, FlashProgress> _multiFlashProgress = {};
@@ -252,6 +255,7 @@ class _FlasherPageState extends State<FlasherPage>
       _selectedDevice = device;
       _selectedVersion = version;
       _firmwarePath = null; // Reset custom firmware
+      _firmwareTargetChip = null;
 
       // Auto-select matching port
       final matching = _findMatchingPort(device);
@@ -271,8 +275,28 @@ class _FlasherPageState extends State<FlasherPage>
     );
 
     if (result != null && result.files.isNotEmpty) {
+      final path = result.files.first.path;
+      String? targetChip;
+
+      // Parse firmware header to detect target chip
+      if (path != null) {
+        try {
+          final file = File(path);
+          // Read first 14 bytes (enough for ESP-IDF header with chip_id)
+          final raf = await file.open(mode: FileMode.read);
+          final header = await raf.read(14);
+          await raf.close();
+          targetChip = EspToolProtocol.parseFirmwareTargetChip(
+            Uint8List.fromList(header),
+          );
+        } catch (_) {
+          // Ignore read errors — will proceed without chip info
+        }
+      }
+
       setState(() {
-        _firmwarePath = result.files.first.path;
+        _firmwarePath = path;
+        _firmwareTargetChip = targetChip;
       });
     }
   }
@@ -1042,12 +1066,32 @@ class _FlasherPageState extends State<FlasherPage>
                     onPressed: () {
                       setState(() {
                         _firmwarePath = null;
+                        _firmwareTargetChip = null;
                       });
                     },
                     tooltip: 'Clear',
                   ),
                 ],
               ),
+              if (_firmwareTargetChip != null) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.blue[50],
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: Colors.blue[200]!),
+                  ),
+                  child: Text(
+                    'Target: $_firmwareTargetChip',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blue[800],
+                    ),
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
               Row(
                 children: [

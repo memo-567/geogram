@@ -1,7 +1,7 @@
 # Flasher Format Specification
 
-**Version**: 1.0
-**Last Updated**: 2026-01-24
+**Version**: 1.1
+**Last Updated**: 2026-02-09
 **Status**: Draft
 
 ## Table of Contents
@@ -15,6 +15,7 @@
 - [Flashing Workflow](#flashing-workflow)
 - [Complete Examples](#complete-examples)
 - [Validation Rules](#validation-rules)
+- [Chip Compatibility Verification](#chip-compatibility-verification)
 - [Security Considerations](#security-considerations)
 - [Related Documentation](#related-documentation)
 - [Change Log](#change-log)
@@ -664,6 +665,91 @@ await protocol.disconnect();
 - Recommended size: 400x300 pixels
 - Max file size: 500 KB
 
+## Chip Compatibility Verification
+
+### Problem
+
+Firmware binaries are compiled for a specific ESP32 chip architecture. Flashing firmware built for one chip (e.g., ESP32-C3, RISC-V) onto a different chip (e.g., ESP32-S3, Xtensa) will not work — the device will crash or be unresponsive after flashing. Filename-based detection is unreliable because vendors use arbitrary naming conventions and different board models may use the same underlying chip.
+
+### Solution: Binary Header + Hardware Detection
+
+The flasher uses two independent, vendor-agnostic sources of chip identity:
+
+1. **Firmware binary header** — ESP-IDF application binaries contain a `chip_id` field at byte offset 12 (16-bit little-endian) in the extended image header.
+2. **Hardware chip detection** — During bootloader sync, the protocol reads the `CHIP_DETECT_MAGIC` register at address `0x40001000` to identify the connected chip.
+
+By comparing these two values before writing, the flasher prevents incompatible firmware from being flashed regardless of filename, vendor, or board model.
+
+### ESP-IDF Binary Image Header
+
+```
+Offset  Size  Field
+------  ----  -----
+0x00    1     Magic byte (0xE9)
+0x01    1     Segment count
+0x02    1     SPI flash mode
+0x03    1     SPI flash size + frequency
+0x04    4     Entry point address
+--- Extended header ---
+0x08    1     WP pin
+0x09    3     SPI pin drive settings
+0x0C    2     chip_id (16-bit LE)  <-- TARGET CHIP
+0x0E    1     Min chip revision
+0x0F    2     Min chip revision (full)
+0x11    2     Max chip revision (full)
+0x13    4     Reserved
+0x17    1     Hash appended flag
+```
+
+### Firmware chip_id Values
+
+| chip_id | Chip Name  | Architecture |
+|---------|------------|-------------|
+| 0x0000  | ESP32      | Xtensa LX6  |
+| 0x0002  | ESP32-S2   | Xtensa LX7  |
+| 0x0005  | ESP32-C3   | RISC-V      |
+| 0x0009  | ESP32-S3   | Xtensa LX7  |
+| 0x000C  | ESP32-C2   | RISC-V      |
+| 0x000D  | ESP32-C6   | RISC-V      |
+| 0x0010  | ESP32-H2   | RISC-V      |
+
+### Hardware Chip Detection (CHIP_DETECT_MAGIC register)
+
+| Register Value | Chip Name  |
+|---------------|------------|
+| 0x00F01D83    | ESP32      |
+| 0x6921506F    | ESP32-C3   |
+| 0x1B31506F    | ESP32-C3 (ECO6+) |
+| 0x09          | ESP32-S2   |
+| 0x000007C6    | ESP32-S3   |
+| 0x0000DC6F    | ESP32-C6   |
+| 0x2CE0806F    | ESP32-H2   |
+| 0x6F51306F    | ESP32-C2   |
+
+### Verification Workflow
+
+```
+1. User selects firmware (.bin file)
+   → Parse header → extract chip_id → display "Target: ESP32-S3"
+
+2. User clicks Flash
+   → Connect to bootloader → sync
+   → Read CHIP_DETECT_MAGIC register → detect "ESP32-C3"
+
+3. Compare firmware target vs hardware
+   → ESP32-S3 ≠ ESP32-C3 → BLOCK with error:
+     "Firmware is built for ESP32-S3 but the connected
+      device is ESP32-C3."
+
+4. If match → proceed with flash
+```
+
+### Important Notes
+
+- This verification is **architecture-level**, not model-level. A firmware built for ESP32-S3 will work on any ESP32-S3 board (Heltec V3, LILYGO T3-S3, etc.) regardless of vendor.
+- Non-ESP-IDF binaries (e.g., raw bootloader images, Arduino sketches without IDF headers) may not have a valid `chip_id`. In this case, verification is skipped and the user proceeds at their own risk.
+- The `chip_id` check happens at the service layer, after establishing a serial connection but before any flash write operations.
+
 ## Security Considerations
 
 ### Firmware Verification
@@ -691,6 +777,13 @@ await protocol.disconnect();
 - [esptool.py Source](https://github.com/espressif/esptool) - Reference implementation
 
 ## Change Log
+
+### Version 1.1 (2026-02-09)
+
+- Added chip compatibility verification section
+- ESP-IDF binary header parsing for target chip detection
+- Hardware vs firmware chip mismatch prevention
+- Architecture-level (not model-level) validation
 
 ### Version 1.0 (2026-01-24)
 

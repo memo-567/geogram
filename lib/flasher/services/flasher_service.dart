@@ -215,6 +215,17 @@ class FlasherService {
         throw ConnectionException('Failed to connect to device');
       }
 
+      // Chip compatibility check: compare firmware target chip vs detected hardware
+      final detectedChip = _currentProtocol!.chipInfo;
+      final firmwareTargetChip = EspToolProtocol.parseFirmwareTargetChip(firmwareData);
+      if (detectedChip != null && firmwareTargetChip != null &&
+          detectedChip != firmwareTargetChip) {
+        throw FlashException(
+          'Firmware is built for $firmwareTargetChip but the connected device '
+          'is $detectedChip. Flashing incompatible firmware would brick the device.',
+        );
+      }
+
       // Flash
       await _currentProtocol!.flash(
         firmwareData,
