@@ -25,7 +25,7 @@
     "flash_mode": "dio",
     "flash_freq": "80m",
     "flash_size": "4MB",
-    "firmware_url": "https://github.com/geograms/geogram/releases/latest/download/geogram-esp32-c3.bin"
+    "firmware_url": "https://github.com/geograms/geogram/releases/latest/download/geogram-ESP32C3-mini.bin"
   },
   "usb": {
     "vid": "0x303A",

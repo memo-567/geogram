@@ -22,7 +22,7 @@
               "flash": {
                 "protocol": "esptool",
                 "baud_rate": 460800,
-                "firmware_url": "https://github.com/geograms/geogram/releases/latest/download/geogram-esp32-c3.bin"
+                "firmware_url": "https://github.com/geograms/geogram/releases/latest/download/geogram-ESP32C3-mini.bin"
               },
               "usb": {
                 "vid": "0x303A",

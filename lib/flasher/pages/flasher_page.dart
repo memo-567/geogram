@@ -777,7 +777,7 @@ class _FlasherPageState extends State<FlasherPage>
         Positioned(
           right: 16,
           bottom: 16,
-          child: Column(
+          child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               FloatingActionButton.extended(
@@ -786,7 +786,7 @@ class _FlasherPageState extends State<FlasherPage>
                 icon: const Icon(Icons.download),
                 label: const Text('Download'),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(width: 12),
               FloatingActionButton.extended(
                 heroTag: 'add_firmware',
                 onPressed: _openAddFirmwareWizard,
