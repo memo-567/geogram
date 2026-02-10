@@ -52,14 +52,12 @@ class FirmwareDownloadDialog extends StatefulWidget {
   final String basePath;
   final Map<String, Map<String, List<DeviceDefinition>>> hierarchy;
   final ProfileStorage? storage;
-  final VoidCallback? onComplete;
 
   const FirmwareDownloadDialog({
     super.key,
     required this.basePath,
     required this.hierarchy,
     this.storage,
-    this.onComplete,
   });
 
   @override
@@ -260,9 +258,6 @@ class _FirmwareDownloadDialogState extends State<FirmwareDownloadDialog> {
       // Mark as downloaded
       _sessionDownloaded.add(device.hierarchyKey);
 
-      // Reload library
-      widget.onComplete?.call();
-
       if (mounted) {
         setState(() {
           _downloadingModel = null;
@@ -275,6 +270,13 @@ class _FirmwareDownloadDialogState extends State<FirmwareDownloadDialog> {
             backgroundColor: Colors.green,
           ),
         );
+
+        // Auto-close dialog and return downloaded device info
+        Navigator.of(context).pop(<String, String>{
+          'project': device.project,
+          'architecture': device.architecture,
+          'model': device.model,
+        });
       }
     } catch (e) {
       if (mounted) {

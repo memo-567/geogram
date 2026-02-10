@@ -837,20 +837,43 @@ class _FlasherPageState extends State<FlasherPage>
     );
   }
 
-  void _openFirmwareDownloadDialog() {
-    Navigator.of(context).push(
+  void _openFirmwareDownloadDialog() async {
+    final result = await Navigator.of(context).push<Map<String, String>>(
       MaterialPageRoute(
         fullscreenDialog: true,
         builder: (context) => FirmwareDownloadDialog(
           basePath: widget.basePath,
           hierarchy: _hierarchy,
           storage: _flasherService.storage.profileStorage,
-          onComplete: () {
-            _loadDevices();
-          },
         ),
       ),
     );
+
+    // Always reload library (user may have downloaded something)
+    await _loadDevices();
+
+    // If a device was downloaded, auto-select it and switch to Flasher tab
+    if (result != null) {
+      _autoSelectDownloadedDevice(
+        result['project']!,
+        result['architecture']!,
+        result['model']!,
+      );
+    }
+  }
+
+  void _autoSelectDownloadedDevice(String project, String architecture, String model) {
+    final archMap = _hierarchy[project];
+    if (archMap == null) return;
+    final devices = archMap[architecture];
+    if (devices == null) return;
+
+    final device = devices.firstWhere(
+      (d) => d.effectiveModel == model,
+      orElse: () => devices.first,
+    );
+
+    _onFirmwareSelected(device, null);
   }
 
   Widget _buildFlasherTab() {
