@@ -16,6 +16,7 @@ import '../models/blog_post.dart';
 import '../models/event.dart';
 import '../models/report.dart';
 import '../services/event_service.dart';
+import '../services/profile_storage.dart';
 import '../util/app_constants.dart';
 import '../services/station_alert_api.dart';
 import '../services/station_place_api.dart';
@@ -3071,6 +3072,7 @@ class PureStationServer {
 
     final contactsPath = path.join(PureStorageConfig().getCallsignDir(_settings.callsign), 'contacts');
     final contactService = ContactService();
+    contactService.setStorage(FilesystemProfileStorage(contactsPath));
     await contactService.initializeApp(contactsPath);
     final contacts = await contactService.loadAllContactsRecursively();
     for (final contact in contacts) {
@@ -4220,7 +4222,8 @@ class PureStationServer {
       }
 
       final eventService = EventService();
-      final appPath = path.dirname(path.dirname(path.dirname(eventDir)));
+      final appPath = path.dirname(path.dirname(eventDir));
+      eventService.setStorage(FilesystemProfileStorage(appPath));
       await eventService.initializeApp(appPath);
       final event = await eventService.loadEvent(eventId);
 
