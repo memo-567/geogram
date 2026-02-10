@@ -2,6 +2,8 @@ Import("env")
 import os
 import shutil
 import filecmp
+import json
+from datetime import datetime, timezone
 
 def post_build_action(source, target, env):
     """
@@ -44,6 +46,17 @@ def post_build_action(source, target, env):
             else:
                 shutil.copy2(bin_dst, flasher_bin)
                 print(f"[Geogram] Flasher firmware synced to: {flasher_bin}")
+                # Update modified_at in device.json so the app detects the new firmware
+                device_json_path = os.path.join(flasher_dir, "device.json")
+                if os.path.exists(device_json_path):
+                    with open(device_json_path, 'r') as f:
+                        device_data = json.load(f)
+                    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    device_data["modified_at"] = now
+                    with open(device_json_path, 'w') as f:
+                        json.dump(device_data, f, indent=2)
+                        f.write("\n")
+                    print(f"[Geogram] Updated device.json modified_at to {now}")
         else:
             print(f"[Geogram] Warning: flasher dir not found: {flasher_dir}")
 
