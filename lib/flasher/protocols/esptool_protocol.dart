@@ -57,8 +57,8 @@ class EspToolProtocol implements FlashProtocol {
     0x00F01D83: 'ESP32',
     0x6921506F: 'ESP32-C3',
     0x1B31506F: 'ESP32-C3', // ECO6+
-    0x09: 'ESP32-S2',
-    0x000007C6: 'ESP32-S3',
+    0x000007C6: 'ESP32-S2',
+    0x09: 'ESP32-S3',
     0x0000DC6F: 'ESP32-C6',
     0x2CE0806F: 'ESP32-H2',
     0x6F51306F: 'ESP32-C2',
