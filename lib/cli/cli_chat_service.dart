@@ -4,6 +4,7 @@ import 'dart:io';
 import '../models/chat_message.dart';
 import '../models/chat_channel.dart';
 import '../services/chat_service.dart';
+import '../services/profile_storage.dart';
 import 'pure_storage_config.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
@@ -59,6 +60,7 @@ class CliChatService {
     }
 
     // Initialize the underlying ChatService
+    _chatService.setStorage(FilesystemProfileStorage(appPath));
     await _chatService.initializeApp(appPath, creatorNpub: npub);
 
     // Ensure main channel exists

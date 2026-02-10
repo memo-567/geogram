@@ -970,6 +970,12 @@ class StationServerService {
 
     final contactsPath = path.join(StorageConfig().getCallsignDir(callsign), 'contacts');
     final contactService = ContactService();
+    final profileStorage = AppService().profileStorage;
+    if (profileStorage != null) {
+      contactService.setStorage(ScopedProfileStorage.fromAbsolutePath(profileStorage, contactsPath));
+    } else {
+      contactService.setStorage(FilesystemProfileStorage(contactsPath));
+    }
     await contactService.initializeApp(contactsPath);
     final contacts = await contactService.loadAllContactsRecursively();
     for (final contact in contacts) {
@@ -4924,7 +4930,13 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
       }
 
       final eventService = EventService();
-      final appPath = path.dirname(path.dirname(path.dirname(eventDir)));
+      final appPath = path.dirname(path.dirname(eventDir));
+      final profileStorage = AppService().profileStorage;
+      if (profileStorage != null) {
+        eventService.setStorage(ScopedProfileStorage.fromAbsolutePath(profileStorage, appPath));
+      } else {
+        eventService.setStorage(FilesystemProfileStorage(appPath));
+      }
       await eventService.initializeApp(appPath);
       final event = await eventService.loadEvent(eventId);
 
