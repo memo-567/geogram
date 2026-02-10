@@ -337,11 +337,22 @@ public class GeogramApplication extends Application {
                 long restartTime = System.currentTimeMillis() + RESTART_DELAY_MS;
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    alarmManager.setExactAndAllowWhileIdle(
-                        AlarmManager.RTC_WAKEUP,
-                        restartTime,
-                        pendingIntent
-                    );
+                    // On API 31+, check if exact alarms are permitted
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                            && !alarmManager.canScheduleExactAlarms()) {
+                        Log.w(TAG, "Exact alarms not permitted, using inexact alarm");
+                        alarmManager.setAndAllowWhileIdle(
+                            AlarmManager.RTC_WAKEUP,
+                            restartTime,
+                            pendingIntent
+                        );
+                    } else {
+                        alarmManager.setExactAndAllowWhileIdle(
+                            AlarmManager.RTC_WAKEUP,
+                            restartTime,
+                            pendingIntent
+                        );
+                    }
                 } else {
                     alarmManager.setExact(
                         AlarmManager.RTC_WAKEUP,

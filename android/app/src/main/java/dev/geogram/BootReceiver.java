@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.os.Build;
 import android.util.Log;
 
 /**
@@ -46,13 +47,17 @@ public class BootReceiver extends BroadcastReceiver {
                 return;
             }
 
-            Log.i(TAG, "Device boot detected, starting BLE foreground service");
+            Log.i(TAG, "Device boot detected on API " + Build.VERSION.SDK_INT +
+                   " (" + Build.MANUFACTURER + " " + Build.MODEL + ")");
 
             // Start the foreground service with boot flag for Android 15+ compatibility
             // The service will use only connectedDevice type (not dataSync) when from boot
-            BLEForegroundService.startFromBoot(context);
-
-            Log.d(TAG, "BLE foreground service start requested after boot");
+            try {
+                BLEForegroundService.startFromBoot(context);
+                Log.d(TAG, "BLE foreground service start requested after boot");
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to start foreground service from boot: " + e.getMessage(), e);
+            }
         }
     }
 }

@@ -323,6 +323,34 @@ class BLEForegroundService {
     }
   }
 
+  /// Check if the foreground service was started from boot.
+  /// Returns true if the service is running but Flutter engine wasn't ready yet.
+  Future<bool> isStartedFromBoot() async {
+    if (kIsWeb || !Platform.isAndroid) return false;
+    try {
+      final result = await _channel.invokeMethod<bool>('isStartedFromBoot');
+      return result ?? false;
+    } catch (e) {
+      LogService().log('BLEForegroundService: Error checking boot state: $e');
+      return false;
+    }
+  }
+
+  /// Notify the native service that Flutter engine is ready after boot.
+  /// This triggers the notification downgrade and re-enables keep-alive mechanisms.
+  Future<bool> bootInitComplete() async {
+    if (kIsWeb || !Platform.isAndroid) return false;
+    try {
+      final result = await _channel.invokeMethod<bool>('bootInitComplete');
+      _isRunning = true; // Service is running since it was started from boot
+      LogService().log('BLEForegroundService: Boot init complete signaled to native');
+      return result ?? false;
+    } catch (e) {
+      LogService().log('BLEForegroundService: Error signaling boot init complete: $e');
+      return false;
+    }
+  }
+
   /// Verify that the native channel is ready and responsive.
   /// This can be used after app resume to ensure the Flutter-Native communication
   /// is working correctly after the app was backgrounded.
