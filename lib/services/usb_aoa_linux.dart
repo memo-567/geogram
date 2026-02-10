@@ -69,7 +69,7 @@ const AOA_MANUFACTURER = "Geogram";
 const AOA_MODEL = "Geogram Device";
 const AOA_DESCRIPTION = "Geogram USB Link";
 const AOA_VERSION = "1.0";
-const AOA_URI = "https://geogram.dev";
+const AOA_URI = "https://geogram.radio";
 const AOA_SERIAL = "geogram-linux";
 
 // Known Android USB VIDs (for device discovery)

@@ -174,7 +174,7 @@ final class UsbBulkTransfer extends Struct {
 | 1 | Model | "Geogram Device" |
 | 2 | Description | "Geogram USB Link" |
 | 3 | Version | "1.0" |
-| 4 | URI | "https://geogram.dev" |
+| 4 | URI | "https://geogram.radio" |
 | 5 | Serial | "geogram-linux" |
 
 ### Google AOA VID/PID

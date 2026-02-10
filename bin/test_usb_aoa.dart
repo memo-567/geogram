@@ -205,7 +205,7 @@ void main() async {
     'Geogram Device',    // Model
     'Geogram USB Link',  // Description
     '1.0',               // Version
-    'https://geogram.dev', // URI
+    'https://geogram.radio', // URI
     'geogram-linux',     // Serial
   ];
 

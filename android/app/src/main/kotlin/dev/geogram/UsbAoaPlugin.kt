@@ -50,7 +50,7 @@ class UsbAoaPlugin(
         private const val MODEL = "Geogram Device"
         private const val DESCRIPTION = "Geogram USB Communication"
         private const val VERSION = "1.0"
-        private const val URI = "https://geogram.dev"
+        private const val URI = "https://geogram.radio"
         private const val SERIAL = "geogram-aoa"
     }
 
