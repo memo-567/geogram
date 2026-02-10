@@ -419,6 +419,14 @@ class DevicesService {
       case DebugAction.mirrorRemoveAllowedPeer:
         // Mirror sync actions are handled directly by LogApiService
         break;
+      case DebugAction.mirrorOpenSettings:
+      case DebugAction.mirrorOpenWizard:
+        // Mirror navigation is handled by main.dart
+        break;
+      case DebugAction.profileList:
+      case DebugAction.profileDelete:
+        // Profile actions are handled directly by LogApiService
+        break;
       case DebugAction.openFlasherMonitor:
         // Flasher monitor navigation is handled by main.dart
         break;
