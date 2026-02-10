@@ -1,6 +1,7 @@
 Import("env")
 import os
 import shutil
+import filecmp
 
 def post_build_action(source, target, env):
     """
@@ -38,8 +39,11 @@ def post_build_action(source, target, env):
         )
         flasher_bin = os.path.join(flasher_dir, "firmware.bin")
         if os.path.isdir(flasher_dir):
-            shutil.copy2(bin_dst, flasher_bin)
-            print(f"[Geogram] Flasher firmware synced to: {flasher_bin}")
+            if os.path.exists(flasher_bin) and filecmp.cmp(bin_dst, flasher_bin, shallow=False):
+                print(f"[Geogram] Flasher firmware unchanged, skipping: {flasher_bin}")
+            else:
+                shutil.copy2(bin_dst, flasher_bin)
+                print(f"[Geogram] Flasher firmware synced to: {flasher_bin}")
         else:
             print(f"[Geogram] Warning: flasher dir not found: {flasher_dir}")
 
