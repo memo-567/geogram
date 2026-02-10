@@ -5,11 +5,13 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/device_definition.dart';
+import '../../services/profile_storage.dart';
 
 /// A single entry from the remote firmware catalog
 class CatalogDevice {
@@ -49,12 +51,14 @@ class CatalogDevice {
 class FirmwareDownloadDialog extends StatefulWidget {
   final String basePath;
   final Map<String, Map<String, List<DeviceDefinition>>> hierarchy;
+  final ProfileStorage? storage;
   final VoidCallback? onComplete;
 
   const FirmwareDownloadDialog({
     super.key,
     required this.basePath,
     required this.hierarchy,
+    this.storage,
     this.onComplete,
   });
 
@@ -173,9 +177,9 @@ class _FirmwareDownloadDialogState extends State<FirmwareDownloadDialog> {
     });
 
     try {
-      final modelDir = Directory(
-        '${widget.basePath}/${device.project}/${device.architecture}/${device.model}',
-      );
+      final relativeBase =
+          '${device.project}/${device.architecture}/${device.model}';
+      final storage = widget.storage;
 
       // 1. Fetch full device.json from remote
       final deviceJsonUrl = '$_baseUrl/${device.path}';
@@ -188,16 +192,22 @@ class _FirmwareDownloadDialogState extends State<FirmwareDownloadDialog> {
 
       final deviceJson =
           jsonDecode(deviceResponse.body) as Map<String, dynamic>;
+      final deviceJsonContent =
+          const JsonEncoder.withIndent('  ').convert(deviceJson);
 
-      // 2. Create local directory
-      await modelDir.create(recursive: true);
+      // 2. Create directory and write device.json
+      if (storage != null) {
+        await storage.createDirectory(relativeBase);
+        await storage.writeString(
+            '$relativeBase/device.json', deviceJsonContent);
+      } else {
+        final modelDir = Directory('${widget.basePath}/$relativeBase');
+        await modelDir.create(recursive: true);
+        await File('${modelDir.path}/device.json')
+            .writeAsString(deviceJsonContent);
+      }
 
-      // 3. Write device.json
-      await File('${modelDir.path}/device.json').writeAsString(
-        const JsonEncoder.withIndent('  ').convert(deviceJson),
-      );
-
-      // 4. Download media photo if present
+      // 3. Download media photo if present
       final mediaJson = deviceJson['media'] as Map<String, dynamic>?;
       final photo = mediaJson?['photo'] as String?;
       if (photo != null) {
@@ -205,19 +215,25 @@ class _FirmwareDownloadDialogState extends State<FirmwareDownloadDialog> {
           _downloadProgress = 'Downloading photo...';
         });
 
-        final mediaDir = Directory('${modelDir.path}/media');
-        await mediaDir.create(recursive: true);
-
         final photoUrl =
-            '$_baseUrl/${device.project}/${device.architecture}/${device.model}/media/$photo';
+            '$_baseUrl/$relativeBase/media/$photo';
         final photoResponse = await http.get(Uri.parse(photoUrl));
         if (photoResponse.statusCode == 200) {
-          await File('${mediaDir.path}/$photo')
-              .writeAsBytes(photoResponse.bodyBytes);
+          if (storage != null) {
+            await storage.createDirectory('$relativeBase/media');
+            await storage.writeBytes('$relativeBase/media/$photo',
+                Uint8List.fromList(photoResponse.bodyBytes));
+          } else {
+            final mediaDir =
+                Directory('${widget.basePath}/$relativeBase/media');
+            await mediaDir.create(recursive: true);
+            await File('${mediaDir.path}/$photo')
+                .writeAsBytes(photoResponse.bodyBytes);
+          }
         }
       }
 
-      // 5. Download firmware binary if URL is available
+      // 4. Download firmware binary if URL is available
       final flashJson = deviceJson['flash'] as Map<String, dynamic>?;
       final firmwareUrl = flashJson?['firmware_url'] as String?;
       if (firmwareUrl != null) {
@@ -232,9 +248,13 @@ class _FirmwareDownloadDialogState extends State<FirmwareDownloadDialog> {
           );
         }
 
-        // Save firmware.bin next to device.json
-        await File('${modelDir.path}/firmware.bin')
-            .writeAsBytes(firmwareResponse.bodyBytes);
+        if (storage != null) {
+          await storage.writeBytes('$relativeBase/firmware.bin',
+              Uint8List.fromList(firmwareResponse.bodyBytes));
+        } else {
+          await File('${widget.basePath}/$relativeBase/firmware.bin')
+              .writeAsBytes(firmwareResponse.bodyBytes);
+        }
       }
 
       // Mark as downloaded

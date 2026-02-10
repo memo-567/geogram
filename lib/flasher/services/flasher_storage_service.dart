@@ -17,6 +17,14 @@ class FlasherStorageService {
 
   FlasherStorageService(this.basePath, this._storage);
 
+  /// Expose the underlying ProfileStorage (for passing to other widgets)
+  ProfileStorage get profileStorage => _storage;
+
+  /// Check if a file exists at the given relative path
+  Future<bool> fileExists(String relativePath) async {
+    return _storage.exists(relativePath);
+  }
+
   /// Load metadata.json
   Future<FlasherMetadata?> loadMetadata() async {
     try {

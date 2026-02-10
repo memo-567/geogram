@@ -360,6 +360,14 @@ class _FlasherPageState extends State<FlasherPage>
       }
     }
 
+    // For versionless devices, check for root firmware.bin via ProfileStorage
+    if (firmwarePath == null && _selectedVersion == null && device.basePath != null) {
+      final relPath = '${device.effectiveProject}/${device.effectiveArchitecture}/${device.effectiveModel}/firmware.bin';
+      if (await _flasherService.storage.fileExists(relPath)) {
+        firmwarePath = '${device.basePath}/firmware.bin';
+      }
+    }
+
     if (isMultiFlash) {
       // Flash multiple devices in parallel
       await _flashMultipleDevices(portsToFlash, firmwarePath, device);
@@ -836,6 +844,7 @@ class _FlasherPageState extends State<FlasherPage>
         builder: (context) => FirmwareDownloadDialog(
           basePath: widget.basePath,
           hierarchy: _hierarchy,
+          storage: _flasherService.storage.profileStorage,
           onComplete: () {
             _loadDevices();
           },
