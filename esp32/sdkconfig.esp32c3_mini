@@ -424,6 +424,12 @@ CONFIG_PARTITION_TABLE_MD5=y
 # end of Partition Table
 
 #
+# Geogram Board Selection
+#
+CONFIG_GEOGRAM_BOARD_ESP32C3_MINI=y
+# end of Geogram Board Selection
+
+#
 # Geogram Mesh Networking
 #
 CONFIG_GEOGRAM_MESH_ENABLED=y

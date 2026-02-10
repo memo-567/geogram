@@ -5,6 +5,9 @@
 CONFIG_IDF_TARGET_ESP32S3=y
 CONFIG_IDF_TARGET="esp32s3"
 
+# Geogram board selection
+CONFIG_GEOGRAM_BOARD_EPAPER_1IN54=y
+
 # PSRAM configuration (Quad mode - required for LVGL buffer)
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_QUAD=y

@@ -1,3 +1,4 @@
+# Only build for ESP32-C3 Mini
 if("${IDF_TARGET}" STREQUAL "esp32c3")
     idf_component_register(
         SRCS "model_init.c"

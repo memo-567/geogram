@@ -1,7 +1,7 @@
 # LVGL port for Geogram project
 # Only build for ESP32-S3 targets with e-paper display
 
-if(CONFIG_IDF_TARGET_ESP32S3)
+if(CONFIG_GEOGRAM_BOARD_EPAPER_1IN54)
     idf_component_register(
         SRCS "lvgl_port.c"
         INCLUDE_DIRS "."

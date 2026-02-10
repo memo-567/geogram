@@ -65,6 +65,30 @@ def patch_all_legacy_drivers():
         if os.path.exists(filepath):
             patch_legacy_driver(filepath, driver_name)
 
+def sync_version_from_pubspec():
+    """
+    Read the project version from ../pubspec.yaml and inject it as a build flag.
+    This keeps the ESP32 firmware version in sync with the main Flutter project.
+    """
+    project_dir = env.subst("$PROJECT_DIR")
+    pubspec_path = os.path.join(project_dir, "..", "pubspec.yaml")
+
+    if not os.path.exists(pubspec_path):
+        print("[Geogram] pubspec.yaml not found, using default version from app_config.h")
+        return
+
+    with open(pubspec_path, 'r') as f:
+        for line in f:
+            match = re.match(r'^version:\s*(\d+\.\d+\.\d+)', line)
+            if match:
+                version = match.group(1)
+                flag = f'-DGEOGRAM_VERSION=\\"{version}\\"'
+                env.Append(BUILD_FLAGS=[flag])
+                print(f"[Geogram] Version synced from pubspec.yaml: {version}")
+                return
+
+    print("[Geogram] Could not parse version from pubspec.yaml, using default")
+
 def pre_build_action(source, target, env):
     """
     Pre-build script for environment setup
@@ -84,5 +108,8 @@ def pre_build_action(source, target, env):
 
 # Apply patches early
 patch_all_legacy_drivers()
+
+# Sync version from main project pubspec.yaml
+sync_version_from_pubspec()
 
 env.AddPreAction("buildprog", pre_build_action)

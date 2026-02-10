@@ -4,7 +4,7 @@
 set(HTTP_REQUIRES esp_http_server esp_https_server nvs_flash log geogram_station geogram_ws geogram_common)
 
 # Add tiles and updates for boards with SD card support
-if(CONFIG_IDF_TARGET_ESP32S3)
+if(CONFIG_GEOGRAM_BOARD_EPAPER_1IN54)
     list(APPEND HTTP_REQUIRES geogram_tiles geogram_updates)
 endif()
 

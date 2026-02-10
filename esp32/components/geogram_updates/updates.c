@@ -3,6 +3,10 @@
  * @brief Update mirror service implementation
  */
 
+#include "sdkconfig.h"
+
+#if CONFIG_GEOGRAM_BOARD_EPAPER_1IN54
+
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -709,3 +713,25 @@ esp_err_t updates_register_http_handlers(httpd_handle_t server)
     ESP_LOGI(TAG, "Update HTTP handlers registered");
     return ESP_OK;
 }
+
+#else // !CONFIG_GEOGRAM_BOARD_EPAPER_1IN54
+
+// Stubs for boards without SD card
+#include "updates.h"
+
+esp_err_t updates_init(void) { return ESP_ERR_NOT_SUPPORTED; }
+bool updates_is_available(void) { return false; }
+esp_err_t updates_check_github(void) { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t updates_start_polling(int interval_seconds) { return ESP_ERR_NOT_SUPPORTED; }
+void updates_stop_polling(void) {}
+esp_err_t updates_get_release(update_release_t *release) { return ESP_ERR_NOT_FOUND; }
+esp_err_t updates_get_stats(update_stats_t *stats) { return ESP_ERR_NOT_SUPPORTED; }
+size_t updates_build_latest_json(char *buffer, size_t buffer_size) {
+    if (buffer && buffer_size > 2) { buffer[0] = '{'; buffer[1] = '}'; buffer[2] = '\0'; return 2; }
+    return 0;
+}
+esp_err_t updates_register_http_handlers(httpd_handle_t server) { return ESP_ERR_NOT_SUPPORTED; }
+update_asset_type_t updates_asset_type_from_filename(const char *filename) { return 0; }
+const char *updates_asset_type_to_string(update_asset_type_t type) { return "unknown"; }
+
+#endif // CONFIG_GEOGRAM_BOARD_EPAPER_1IN54

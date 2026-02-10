@@ -3,6 +3,10 @@
  * @brief Tile cache manager implementation
  */
 
+#include "sdkconfig.h"
+
+#if CONFIG_GEOGRAM_BOARD_EPAPER_1IN54
+
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -400,3 +404,20 @@ esp_err_t tiles_register_http_handler(httpd_handle_t server)
     ESP_LOGI(TAG, "Tile HTTP handler registered at /tiles/*");
     return ESP_OK;
 }
+
+#else // !CONFIG_GEOGRAM_BOARD_EPAPER_1IN54
+
+// Stubs for boards without SD card
+#include "tiles.h"
+
+esp_err_t tiles_init(void) { return ESP_ERR_NOT_SUPPORTED; }
+bool tiles_is_available(void) { return false; }
+esp_err_t tiles_get(int z, int x, int y, tile_layer_t layer,
+                    uint8_t *buffer, size_t buffer_size, size_t *tile_size) { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t tiles_register_http_handler(httpd_handle_t server) { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t tiles_get_stats(tile_cache_stats_t *stats) { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t tiles_clear_cache(void) { return ESP_ERR_NOT_SUPPORTED; }
+uint32_t tiles_get_cache_size(void) { return 0; }
+uint32_t tiles_get_cache_count(void) { return 0; }
+
+#endif // CONFIG_GEOGRAM_BOARD_EPAPER_1IN54

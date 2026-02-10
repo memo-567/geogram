@@ -970,7 +970,11 @@ static esp_err_t api_chat_messages_get_handler(httpd_req_t *req)
     int offset = snprintf(buffer, buffer_size,
         "{\"my_callsign\":\"%s\",\"max_len\":%d,\"count\":%d,\"latest_id\":%lu,\"mesh_peers\":%d,",
         callsign, MESH_CHAT_MAX_MESSAGE_LEN, (int)mesh_chat_get_count(),
+#ifdef CONFIG_GEOGRAM_MESH_ENABLED
         (unsigned long)mesh_chat_get_latest_id(), (int)geogram_mesh_get_peer_count());
+#else
+        (unsigned long)mesh_chat_get_latest_id(), 0);
+#endif
 
     // mesh_chat_build_json writes {"messages":[...]} - we skip the opening { and include rest
     char *json_buf = buffer + offset;

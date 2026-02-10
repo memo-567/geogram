@@ -1,5 +1,5 @@
-# Only build for ESP32-S3 targets
-if(CONFIG_IDF_TARGET_ESP32S3)
+# Only build for ESP32-S3 ePaper board
+if(CONFIG_GEOGRAM_BOARD_EPAPER_1IN54)
     idf_component_register(
         SRCS "model_init.c" "board_power.cpp"
         INCLUDE_DIRS "."
@@ -7,6 +7,5 @@ if(CONFIG_IDF_TARGET_ESP32S3)
         PRIV_REQUIRES freertos
     )
 else()
-    # Register empty component for non-ESP32S3 targets
     idf_component_register()
 endif()
