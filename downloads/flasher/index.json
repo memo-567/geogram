@@ -30,6 +30,42 @@
               },
               "versions": [],
               "latest_version": null
+            },
+            {
+              "model": "heltec-v3",
+              "chip": "ESP32-S3",
+              "title": "Heltec WiFi LoRa 32 V3",
+              "description": "Heltec WiFi LoRa 32 V3 board with SX1262 LoRa transceiver, SSD1306 OLED display, and WiFi/BLE support.",
+              "path": "geogram/esp32/heltec-v3/device.json",
+              "flash": {
+                "protocol": "esptool",
+                "baud_rate": 460800,
+                "firmware_url": "https://github.com/geograms/geogram/releases/latest/download/geogram-HeltecV3-LoRa.bin"
+              },
+              "usb": {
+                "vid": "0x303A",
+                "pid": "0x1001"
+              },
+              "versions": [],
+              "latest_version": null
+            },
+            {
+              "model": "heltec-v2",
+              "chip": "ESP32",
+              "title": "Heltec WiFi LoRa 32 V2",
+              "description": "Heltec WiFi LoRa 32 V2 board with SX1276 LoRa transceiver, SSD1306 OLED display, and WiFi/BLE support.",
+              "path": "geogram/esp32/heltec-v2/device.json",
+              "flash": {
+                "protocol": "esptool",
+                "baud_rate": 460800,
+                "firmware_url": "https://github.com/geograms/geogram/releases/latest/download/geogram-HeltecV2-LoRa.bin"
+              },
+              "usb": {
+                "vid": "0x10C4",
+                "pid": "0xEA60"
+              },
+              "versions": [],
+              "latest_version": null
             }
           ]
         }

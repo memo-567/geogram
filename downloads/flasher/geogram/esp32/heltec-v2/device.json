@@ -1,0 +1,39 @@
+{
+  "project": "geogram",
+  "architecture": "esp32",
+  "model": "heltec-v2",
+  "id": "heltec-v2",
+  "family": "esp32",
+  "chip": "ESP32",
+  "title": "Heltec WiFi LoRa 32 V2",
+  "description": "Heltec WiFi LoRa 32 V2 board with SX1276 LoRa transceiver, SSD1306 OLED display, and WiFi/BLE support.",
+  "translations": {
+    "pt": {
+      "description": "Placa Heltec WiFi LoRa 32 V2 com transceptor LoRa SX1276, display OLED SSD1306 e suporte WiFi/BLE."
+    }
+  },
+  "media": {
+    "photo": "heltec-v2.jpg"
+  },
+  "links": {
+    "documentation": "https://docs.heltec.org/en/node/esp32/wifi_lora_32/index.html",
+    "datasheet": "https://www.espressif.com/sites/default/files/documentation/esp32_datasheet_en.pdf"
+  },
+  "flash": {
+    "protocol": "esptool",
+    "baud_rate": 460800,
+    "flash_mode": "dio",
+    "flash_freq": "80m",
+    "flash_size": "4MB",
+    "firmware_url": "https://raw.githubusercontent.com/geograms/geogram/refs/heads/main/downloads/flasher/geogram/esp32/heltec-v2/firmware.bin"
+  },
+  "usb": {
+    "vid": "0x10C4",
+    "pid": "0xEA60",
+    "description": "Silicon Labs CP2102 USB-UART bridge"
+  },
+  "versions": [],
+  "latest_version": null,
+  "created_at": "2026-02-10T10:00:00Z",
+  "modified_at": "2026-02-10T10:00:00Z"
+}
