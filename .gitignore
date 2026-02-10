@@ -98,6 +98,8 @@ android-sync.sh
 # Runtime data directories
 nostr/
 flasher/geogram/
+!downloads/flasher/
+!downloads/flasher/**/*.bin
 
 # Third-party example generated files
 third_party/*/example/android/local.properties
