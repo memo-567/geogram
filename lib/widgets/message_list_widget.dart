@@ -45,6 +45,8 @@ class MessageListWidget extends StatefulWidget {
   final ChatUpload? Function(ChatMessage)? getUploadState;
   /// Callback when retry upload button pressed
   final void Function(ChatMessage)? onRetryUpload;
+  /// Map of uppercase callsign -> display nickname (from contacts)
+  final Map<String, String>? nicknameMap;
 
   const MessageListWidget({
     Key? key,
@@ -70,6 +72,7 @@ class MessageListWidget extends StatefulWidget {
     this.onCancelDownload,
     this.getUploadState,
     this.onRetryUpload,
+    this.nicknameMap,
   }) : super(key: key);
 
   @override
@@ -175,6 +178,7 @@ class _MessageListWidgetState extends State<MessageListWidget> {
                     key: ValueKey(message.timestamp + message.author),
                     message: message,
                     isGroupChat: widget.isGroupChat,
+                    contactNickname: widget.nicknameMap?[message.author.toUpperCase()],
                     onFileOpen: widget.onFileOpen != null
                         ? () => widget.onFileOpen!(message)
                         : null,

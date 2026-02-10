@@ -17,6 +17,7 @@ import '../services/station_cache_service.dart';
 import '../services/storage_config.dart';
 import '../services/chat_file_download_manager.dart';
 import '../api/endpoints/chat_api.dart' show ChatApi;
+import '../services/contact_service.dart';
 import '../util/event_bus.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
@@ -59,6 +60,9 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
   String? _error;
   ChatMessage? _quotedMessage;
 
+  /// Contact nickname map for display in chat bubbles
+  Map<String, String> _nicknameMap = {};
+
   /// Track pending file downloads to avoid duplicate requests
   final Set<String> _pendingDownloads = {};
 
@@ -71,10 +75,20 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
     _initServices();
     _loadMessages();
     _subscribeToDownloadEvents();
+    _loadNicknameMap();
   }
 
   Future<void> _initServices() async {
     await _cacheService.initialize();
+  }
+
+  Future<void> _loadNicknameMap() async {
+    final map = await ContactService().buildNicknameMap();
+    if (mounted) {
+      setState(() {
+        _nicknameMap = map;
+      });
+    }
   }
 
   void _subscribeToDownloadEvents() {
@@ -880,6 +894,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
                         getDownloadState: _getDownloadState,
                         onDownloadPressed: _onDownloadPressed,
                         onCancelDownload: _onCancelDownload,
+                        nicknameMap: _nicknameMap,
                       ),
           ),
 

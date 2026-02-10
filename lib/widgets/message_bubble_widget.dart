@@ -63,6 +63,8 @@ class MessageBubbleWidget extends StatefulWidget {
   final ChatUpload? uploadState;
   /// Callback to retry failed upload
   final VoidCallback? onRetryUpload;
+  /// Contact nickname (fallback when device nickname is not available)
+  final String? contactNickname;
 
   const MessageBubbleWidget({
     Key? key,
@@ -89,6 +91,7 @@ class MessageBubbleWidget extends StatefulWidget {
     this.onCancelDownload,
     this.uploadState,
     this.onRetryUpload,
+    this.contactNickname,
   }) : super(key: key);
 
   @override
@@ -197,14 +200,15 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
          currentProfile.npub.isNotEmpty &&
          widget.message.npub == currentProfile.npub);
 
-    // Get sender's preferred color from cached device status
+    // Get sender's device info (for color and nickname)
+    final device = !isOwnMessage ? DevicesService().getDevice(widget.message.author) : null;
+
     final Color bubbleColor;
     final Color textColor;
     if (isOwnMessage) {
       bubbleColor = theme.colorScheme.primaryContainer;
       textColor = theme.colorScheme.onPrimaryContainer;
     } else {
-      final device = DevicesService().getDevice(widget.message.author);
       bubbleColor = _getBubbleColor(device?.preferredColor, theme);
       textColor = _getTextColor(device?.preferredColor, theme);
     }
@@ -239,13 +243,18 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
             if (widget.isGroupChat && !isOwnMessage)
               Padding(
                 padding: const EdgeInsets.only(left: 12, bottom: 4),
-                child: Text(
-                  widget.message.author,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+                child: Builder(builder: (context) {
+                  final authorNickname = device?.nickname ?? widget.contactNickname;
+                  return Text(
+                    authorNickname != null
+                        ? '$authorNickname (${widget.message.author})'
+                        : widget.message.author,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  );
+                }),
               ),
             // Message bubble
             InkWell(

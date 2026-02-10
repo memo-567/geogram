@@ -325,6 +325,21 @@ class ContactService {
     }
   }
 
+  /// Build a map of uppercase callsign -> display nickname from contact summaries.
+  /// Skips entries where displayName equals callsign (no useful nickname).
+  Future<Map<String, String>> buildNicknameMap() async {
+    final summaries = await loadContactSummaries();
+    if (summaries == null) return {};
+
+    final map = <String, String>{};
+    for (final s in summaries) {
+      if (s.displayName != s.callsign) {
+        map[s.callsign.toUpperCase()] = s.displayName;
+      }
+    }
+    return map;
+  }
+
   /// Save contact summaries to fast.json
   Future<void> saveContactSummaries(List<ContactSummary> summaries) async {
     if (_appPath == null) return;

@@ -3218,6 +3218,19 @@ The TTS service is also available via console commands:
 
 ## Patterns
 
+### Contact Nickname Map
+
+**File:** `lib/services/contact_service.dart` — `buildNicknameMap()`
+
+Builds a `Map<String, String>` (uppercased callsign -> display name) from contact summaries. Useful whenever you need to resolve callsigns to human-readable names (chat bubbles, participant lists, logs, etc.).
+
+```dart
+final nicknameMap = await ContactService().buildNicknameMap();
+final name = nicknameMap['X1ABCD']; // "John Doe" or null
+```
+
+Combined with `DevicesService().getDevice(callsign)?.nickname` for BLE-discovered device nicknames, this gives a two-tier resolution: device nickname (live) -> contact nickname (saved) -> raw callsign.
+
 ### Service-Specific Connectivity Checking
 
 **Problem:** Generic internet checks (pinging google.com/cloudflare.com) raise privacy concerns and don't tell you if your specific service is actually reachable.

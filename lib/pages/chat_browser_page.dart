@@ -142,6 +142,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   // Download progress event subscription
   EventSubscription<ChatDownloadProgressEvent>? _downloadSubscription;
 
+  // Contact nickname map for display in chat bubbles
+  Map<String, String> _nicknameMap = {};
+
   // Local collection paths for group synchronization
   String? _localChatCollectionPath;
   String? _groupsAppPath;
@@ -157,6 +160,16 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     _subscribeToDownloadEvents();
     _startRelayStatusChecker();
     _startMessagePolling();
+    _loadNicknameMap();
+  }
+
+  Future<void> _loadNicknameMap() async {
+    final map = await ContactService().buildNicknameMap();
+    if (mounted) {
+      setState(() {
+        _nicknameMap = map;
+      });
+    }
   }
 
   void _subscribeToDownloadEvents() {
@@ -2527,6 +2540,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                                   getAttachmentData: _resolveAttachedFileData,
                                   onImageOpen: _openAttachedImage,
                                   onMessageReact: _toggleLocalReaction,
+                                  nicknameMap: _nicknameMap,
                                 ),
                               ),
                               // Message input
@@ -2572,6 +2586,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                     getAttachmentData: _resolveAttachedFileData,
                     onImageOpen: _openAttachedImage,
                     onMessageReact: _toggleLocalReaction,
+                    nicknameMap: _nicknameMap,
                   ),
                 ),
                 // Message input
@@ -2706,6 +2721,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             getDownloadState: _getStationDownloadState,
             onDownloadPressed: _onStationDownloadPressed,
             onCancelDownload: _onStationCancelDownload,
+            nicknameMap: _nicknameMap,
           ),
         ),
         // Message input with voice recording and file attachments - same as other chat UIs
