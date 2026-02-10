@@ -71,7 +71,7 @@
     #include "sx1262.h"
     #include "wifi_bsp.h"
     #include "http_server.h"
-#elif BOARD_MODEL == MODEL_HELTEC_V2
+#elif BOARD_MODEL == MODEL_HELTEC_V2 || BOARD_MODEL == MODEL_HELTEC_V1
     #include "model_config.h"
     #include "model_init.h"
     #include "ssd1306.h"
@@ -1058,8 +1058,8 @@ extern "C" void app_main(void)
     }
 #endif  // BOARD_MODEL == MODEL_HELTEC_V3
 
-#if BOARD_MODEL == MODEL_HELTEC_V2
-    // Heltec V2: OLED display + SX1276 LoRa + WiFi AP
+#if BOARD_MODEL == MODEL_HELTEC_V2 || BOARD_MODEL == MODEL_HELTEC_V1
+    // Heltec V1/V2: OLED display + SX1276 LoRa + WiFi AP
 
     // Get device handles
     ssd1306_handle_t display = model_get_display();
@@ -1161,7 +1161,7 @@ extern "C" void app_main(void)
             ESP_LOGE(TAG, "Failed to start WiFi AP: %s", esp_err_to_name(ret));
         }
     }
-#endif  // BOARD_MODEL == MODEL_HELTEC_V2
+#endif  // BOARD_MODEL == MODEL_HELTEC_V2 || MODEL_HELTEC_V1
 
     // Main loop
     ESP_LOGI(TAG, "Entering main loop...");

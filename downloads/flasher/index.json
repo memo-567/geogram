@@ -66,6 +66,24 @@
               },
               "versions": [],
               "latest_version": null
+            },
+            {
+              "model": "heltec-v1",
+              "chip": "ESP32",
+              "title": "Heltec WiFi LoRa 32 V1",
+              "description": "Heltec WiFi LoRa 32 V1 board with SX1276 LoRa transceiver, SSD1306 OLED display, and WiFi/BLE support.",
+              "path": "geogram/esp32/heltec-v1/device.json",
+              "flash": {
+                "protocol": "esptool",
+                "baud_rate": 460800,
+                "firmware_url": "https://github.com/geograms/geogram/releases/latest/download/geogram-HeltecV1-LoRa.bin"
+              },
+              "usb": {
+                "vid": "0x10C4",
+                "pid": "0xEA60"
+              },
+              "versions": [],
+              "latest_version": null
             }
           ]
         }
