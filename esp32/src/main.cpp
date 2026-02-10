@@ -71,6 +71,13 @@
     #include "sx1262.h"
     #include "wifi_bsp.h"
     #include "http_server.h"
+#elif BOARD_MODEL == MODEL_HELTEC_V2
+    #include "model_config.h"
+    #include "model_init.h"
+    #include "ssd1306.h"
+    #include "sx1276.h"
+    #include "wifi_bsp.h"
+    #include "http_server.h"
 #elif BOARD_MODEL == MODEL_ESP32_GENERIC
     #include "model_config.h"
     #include "model_init.h"
@@ -1050,6 +1057,111 @@ extern "C" void app_main(void)
         }
     }
 #endif  // BOARD_MODEL == MODEL_HELTEC_V3
+
+#if BOARD_MODEL == MODEL_HELTEC_V2
+    // Heltec V2: OLED display + SX1276 LoRa + WiFi AP
+
+    // Get device handles
+    ssd1306_handle_t display = model_get_display();
+    sx1276_handle_t lora = model_get_lora();
+
+    // Show boot splash on OLED
+    if (display) {
+        ssd1306_clear(display);
+        ssd1306_draw_string(display, 16, 0, "== GEOGRAM ==", true);
+        ssd1306_draw_string(display, 22, 12, "v" GEOGRAM_VERSION, true);
+        ssd1306_draw_string(display, 0, 28, BOARD_NAME, true);
+        if (lora) {
+            ssd1306_draw_string(display, 0, 40, "LoRa: OK", true);
+        } else {
+            ssd1306_draw_string(display, 0, 40, "LoRa: FAIL", true);
+        }
+        ssd1306_draw_string(display, 0, 52, "Starting WiFi...", true);
+        ssd1306_display(display);
+    }
+
+    // Brief LED flash to indicate boot
+    model_led_on();
+    vTaskDelay(pdMS_TO_TICKS(200));
+    model_led_off();
+
+    // Initialize NOSTR keys (needed for AP SSID with callsign)
+    ret = nostr_keys_init();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to initialize NOSTR keys: %s", esp_err_to_name(ret));
+    } else {
+        ESP_LOGI(TAG, "Station callsign: %s", nostr_keys_get_callsign());
+    }
+
+    // Initialize WiFi
+    ret = geogram_wifi_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize WiFi: %s", esp_err_to_name(ret));
+        if (display) {
+            ssd1306_clear(display);
+            ssd1306_draw_string(display, 0, 28, "WiFi FAILED", true);
+            ssd1306_display(display);
+        }
+    } else {
+        // Build SSID with callsign
+        char ap_ssid[32];
+        const char *callsign = nostr_keys_get_callsign();
+        if (callsign && strlen(callsign) > 0) {
+            snprintf(ap_ssid, sizeof(ap_ssid), "geogram-%s", callsign);
+        } else {
+            snprintf(ap_ssid, sizeof(ap_ssid), "geogram");
+        }
+
+        // Start WiFi AP mode
+        geogram_wifi_ap_config_t ap_config = {};
+        strncpy(ap_config.ssid, ap_ssid, sizeof(ap_config.ssid) - 1);
+        ap_config.password[0] = '\0';
+        ap_config.channel = 1;
+        ap_config.max_connections = 4;
+        ap_config.callback = NULL;
+
+        ret = geogram_wifi_start_ap(&ap_config);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "WiFi AP started: %s", ap_ssid);
+
+            // Start DNS server for captive portal
+            uint32_t ap_ip = 0;
+            if (geogram_wifi_get_ap_ip_addr(&ap_ip) == ESP_OK) {
+                dns_server_start(ap_ip);
+            }
+
+            // Initialize Station API and HTTP server
+            station_init();
+            http_server_start_ex(NULL, true);
+            ESP_LOGI(TAG, "HTTP server started");
+
+            // Start Telnet server
+            if (telnet_server_start(TELNET_DEFAULT_PORT) == ESP_OK) {
+                ESP_LOGI(TAG, "Telnet server started on port %d", TELNET_DEFAULT_PORT);
+            }
+
+            // Update OLED with connection info
+            if (display) {
+                char ip_str[16];
+                geogram_wifi_get_ap_ip(ip_str);
+
+                ssd1306_clear(display);
+                ssd1306_draw_string(display, 0, 0, "== GEOGRAM ==", true);
+                ssd1306_draw_string(display, 0, 12, ap_ssid, true);
+                ssd1306_draw_string(display, 0, 24, ip_str, true);
+                if (lora) {
+                    ssd1306_draw_string(display, 0, 40, "LoRa: Ready", true);
+                }
+                ssd1306_draw_string(display, 0, 52, "v" GEOGRAM_VERSION, true);
+                ssd1306_display(display);
+            }
+
+            model_led_on();  // LED on = system ready
+        } else {
+            ESP_LOGE(TAG, "Failed to start WiFi AP: %s", esp_err_to_name(ret));
+        }
+    }
+#endif  // BOARD_MODEL == MODEL_HELTEC_V2
 
     // Main loop
     ESP_LOGI(TAG, "Entering main loop...");

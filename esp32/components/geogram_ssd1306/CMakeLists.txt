@@ -1,4 +1,4 @@
-if(CONFIG_IDF_TARGET_ESP32S3)
+if(CONFIG_IDF_TARGET_ESP32S3 OR CONFIG_IDF_TARGET_ESP32)
     idf_component_register(
         SRCS "ssd1306.c"
         INCLUDE_DIRS "."

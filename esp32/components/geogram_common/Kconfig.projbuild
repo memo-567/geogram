@@ -16,6 +16,10 @@ menu "Geogram Board Selection"
             bool "ESP32-C3 Mini"
             depends on IDF_TARGET_ESP32C3
 
+        config GEOGRAM_BOARD_HELTEC_V2
+            bool "Heltec WiFi LoRa 32 V2"
+            depends on IDF_TARGET_ESP32
+
         config GEOGRAM_BOARD_GENERIC
             bool "Generic ESP32"
             depends on IDF_TARGET_ESP32
