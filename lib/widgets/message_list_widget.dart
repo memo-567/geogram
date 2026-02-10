@@ -79,33 +79,11 @@ class MessageListWidget extends StatefulWidget {
 class _MessageListWidgetState extends State<MessageListWidget> {
   final ScrollController _scrollController = ScrollController();
   bool _autoScroll = true;
-  int _lastMessageCount = 0;
-  /// Cooldown to prevent rapid scrolling when multiple images load
-  DateTime? _lastScrollTime;
-  /// Track when user last manually scrolled (to prevent hijacking their scroll)
-  DateTime? _lastUserScrollTime;
 
   @override
   void initState() {
     super.initState();
     _scrollController.addListener(_scrollListener);
-    _lastMessageCount = widget.messages.length;
-
-    // Auto-scroll to bottom on first load
-    _requestScrollToBottom(animate: false);
-  }
-
-  @override
-  void didUpdateWidget(MessageListWidget oldWidget) {
-    super.didUpdateWidget(oldWidget);
-
-    final oldCount = _lastMessageCount;
-    _lastMessageCount = widget.messages.length;
-
-    // Scroll to bottom when messages are added (if autoScroll is enabled)
-    if (widget.messages.length > oldCount && _autoScroll) {
-      _requestScrollToBottom(animate: oldCount > 0);
-    }
   }
 
   @override
@@ -114,61 +92,21 @@ class _MessageListWidgetState extends State<MessageListWidget> {
     super.dispose();
   }
 
-  /// Request a scroll to bottom, retrying until the scroll controller is ready
-  void _requestScrollToBottom({bool animate = true, int attempts = 0}) {
-    if (!mounted || attempts > 10) return;
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-
-      if (_scrollController.hasClients && _scrollController.position.hasContentDimensions) {
-        _scrollToBottom(animate: animate);
-      } else {
-        // Controller not ready yet, retry
-        _requestScrollToBottom(animate: animate, attempts: attempts + 1);
-      }
-    });
-  }
-
-  /// Called when a message's content size changes (e.g., image loaded)
-  void _onContentSizeChanged() {
-    if (!_autoScroll || !mounted) return;
-
-    final now = DateTime.now();
-
-    // Don't scroll if user recently scrolled away (respect user intent)
-    if (_lastUserScrollTime != null &&
-        now.difference(_lastUserScrollTime!).inSeconds < 2) {
-      return;
-    }
-
-    // Cooldown: don't scroll if we scrolled recently (prevents rapid scrolling)
-    if (_lastScrollTime != null &&
-        now.difference(_lastScrollTime!).inMilliseconds < 500) {
-      return;
-    }
-
-    _requestScrollToBottom(animate: false);
-  }
-
   /// Listen for scroll events
   void _scrollListener() {
-    // Check if at bottom (within 100 pixels)
     if (_scrollController.hasClients) {
-      final atBottom = _scrollController.position.pixels >=
-          _scrollController.position.maxScrollExtent - 100;
+      // In reverse mode, position 0 is the bottom (newest messages)
+      final atBottom = _scrollController.position.pixels <= 100;
       if (_autoScroll != atBottom) {
-        // User scrolled away from bottom - track this to prevent hijacking
-        if (_autoScroll && !atBottom) {
-          _lastUserScrollTime = DateTime.now();
-        }
         setState(() {
           _autoScroll = atBottom;
         });
       }
 
-      // Load more when scrolling near top
-      if (_scrollController.position.pixels <= 100 &&
+      // Load more (older messages) when scrolling near the top
+      // In reverse mode, top of screen is at maxScrollExtent
+      if (_scrollController.position.pixels >=
+              _scrollController.position.maxScrollExtent - 100 &&
           widget.onLoadMore != null &&
           !widget.isLoading) {
         widget.onLoadMore!();
@@ -176,20 +114,18 @@ class _MessageListWidgetState extends State<MessageListWidget> {
     }
   }
 
-  /// Scroll to bottom of list
+  /// Scroll to bottom of list (position 0 in reverse mode)
   void _scrollToBottom({bool animate = true}) {
     if (!_scrollController.hasClients) return;
 
-    _lastScrollTime = DateTime.now();
-
     if (animate) {
       _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
+        0.0,
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeOut,
       );
     } else {
-      _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+      _scrollController.jumpTo(0.0);
     }
   }
 
@@ -205,11 +141,12 @@ class _MessageListWidgetState extends State<MessageListWidget> {
             ? _buildEmptyState(theme)
             : ListView.builder(
                 controller: _scrollController,
+                reverse: true,
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 itemCount: items.length + (widget.isLoading ? 1 : 0),
                 itemBuilder: (context, index) {
-                  // Loading indicator at top
-                  if (widget.isLoading && index == 0) {
+                  // Loading indicator at top (last index in reverse mode)
+                  if (widget.isLoading && index == items.length) {
                     return Padding(
                       padding: const EdgeInsets.all(16),
                       child: Center(
@@ -226,8 +163,7 @@ class _MessageListWidgetState extends State<MessageListWidget> {
                   }
 
                   // Message bubble
-                  final messageIndex = widget.isLoading ? index - 1 : index;
-                  final item = items[messageIndex];
+                  final item = items[index];
 
                   if (item.isSeparator) {
                     return _buildDateSeparator(theme, item.label ?? '');
@@ -273,8 +209,6 @@ class _MessageListWidgetState extends State<MessageListWidget> {
                     onVoiceDownloadRequested: widget.getVoiceFilePath != null && message.hasVoice
                         ? () => widget.getVoiceFilePath!(message)
                         : null,
-                    // Scroll to bottom when image loads
-                    onContentSizeChanged: _autoScroll ? _onContentSizeChanged : null,
                     // Download manager integration
                     showDownloadButton: widget.shouldShowDownloadButton?.call(message) ?? false,
                     fileSize: widget.getFileSize?.call(message),
@@ -354,7 +288,7 @@ class _MessageListWidgetState extends State<MessageListWidget> {
       items.add(_MessageListItem.message(message));
     }
 
-    return items;
+    return items.reversed.toList();
   }
 
   String _formatDateLabel(DateTime date) {
