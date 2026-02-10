@@ -15,6 +15,7 @@ import '../protocols/flash_protocol.dart';
 import '../serial/serial_port.dart';
 import '../services/flasher_service.dart';
 import '../widgets/add_firmware_wizard.dart';
+import '../widgets/firmware_download_dialog.dart';
 import '../widgets/firmware_tree_widget.dart';
 import '../widgets/flash_progress_widget.dart';
 import '../widgets/serial_monitor_widget.dart';
@@ -776,11 +777,23 @@ class _FlasherPageState extends State<FlasherPage>
         Positioned(
           right: 16,
           bottom: 16,
-          child: FloatingActionButton.extended(
-            heroTag: 'add_firmware',
-            onPressed: _openAddFirmwareWizard,
-            icon: const Icon(Icons.add),
-            label: const Text('Add'),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              FloatingActionButton.extended(
+                heroTag: 'download_firmware',
+                onPressed: _openFirmwareDownloadDialog,
+                icon: const Icon(Icons.download),
+                label: const Text('Download'),
+              ),
+              const SizedBox(height: 12),
+              FloatingActionButton.extended(
+                heroTag: 'add_firmware',
+                onPressed: _openAddFirmwareWizard,
+                icon: const Icon(Icons.add),
+                label: const Text('Add'),
+              ),
+            ],
           ),
         ),
       ],
@@ -806,6 +819,21 @@ class _FlasherPageState extends State<FlasherPage>
       MaterialPageRoute(
         fullscreenDialog: true,
         builder: (context) => AddFirmwareWizard(
+          basePath: widget.basePath,
+          hierarchy: _hierarchy,
+          onComplete: () {
+            _loadDevices();
+          },
+        ),
+      ),
+    );
+  }
+
+  void _openFirmwareDownloadDialog() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (context) => FirmwareDownloadDialog(
           basePath: widget.basePath,
           hierarchy: _hierarchy,
           onComplete: () {
