@@ -43,7 +43,7 @@ class FlasherStorageService {
 
   /// List all projects (v2.0)
   Future<List<String>> listProjects() async {
-    if (!await _storage.exists('')) return [];
+    if (!await _storage.directoryExists('')) return [];
 
     final entries = await _storage.listDirectory('');
     final projects = <String>[];
@@ -61,7 +61,7 @@ class FlasherStorageService {
 
   /// Check if a folder is a v2.0 project folder
   Future<bool> _isProjectFolder(String relativePath) async {
-    if (!await _storage.exists(relativePath)) return false;
+    if (!await _storage.directoryExists(relativePath)) return false;
 
     final entries = await _storage.listDirectory(relativePath);
     for (final entry in entries) {
@@ -85,7 +85,7 @@ class FlasherStorageService {
   /// List architectures in a project (v2.0)
   Future<List<String>> listArchitectures(String project) async {
     final relativePath = project;
-    if (!await _storage.exists(relativePath)) return [];
+    if (!await _storage.directoryExists(relativePath)) return [];
 
     final entries = await _storage.listDirectory(relativePath);
     final architectures = <String>[];
@@ -101,7 +101,7 @@ class FlasherStorageService {
   /// List models in a project/architecture (v2.0)
   Future<List<String>> listModels(String project, String architecture) async {
     final relativePath = '$project/$architecture';
-    if (!await _storage.exists(relativePath)) return [];
+    if (!await _storage.directoryExists(relativePath)) return [];
 
     final entries = await _storage.listDirectory(relativePath);
     final models = <String>[];
@@ -146,7 +146,7 @@ class FlasherStorageService {
     String model,
   ) async {
     final relativePath = '$project/$architecture/$model';
-    if (!await _storage.exists(relativePath)) return [];
+    if (!await _storage.directoryExists(relativePath)) return [];
 
     final entries = await _storage.listDirectory(relativePath);
     final versions = <FirmwareVersion>[];
@@ -189,7 +189,7 @@ class FlasherStorageService {
 
   /// List all device families (v1.0)
   Future<List<String>> listFamilies() async {
-    if (!await _storage.exists('')) return [];
+    if (!await _storage.directoryExists('')) return [];
 
     final entries = await _storage.listDirectory('');
     final families = <String>[];
@@ -215,7 +215,7 @@ class FlasherStorageService {
 
   /// List devices in a family (v1.0)
   Future<List<String>> listDevices(String family) async {
-    if (!await _storage.exists(family)) return [];
+    if (!await _storage.directoryExists(family)) return [];
 
     final entries = await _storage.listDirectory(family);
     final devices = <String>[];
