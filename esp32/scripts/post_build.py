@@ -4,7 +4,7 @@ import shutil
 
 def post_build_action(source, target, env):
     """
-    Post-build script to rename firmware to custom name
+    Post-build script to rename firmware to custom name and sync to flasher downloads.
     """
     firmware_name = env.GetProjectOption("custom_firmware_name", "firmware")
     build_dir = env.subst("$BUILD_DIR")
@@ -28,6 +28,20 @@ def post_build_action(source, target, env):
     if os.path.exists(elf_src):
         shutil.copy2(elf_src, elf_dst)
         print(f"[Geogram] ELF copied to: {elf_dst}")
+
+    # Sync to flasher downloads if this board has a flasher entry
+    flasher_model = env.GetProjectOption("custom_flasher_model", "")
+    if flasher_model and os.path.exists(bin_dst):
+        flasher_dir = os.path.join(
+            env.subst("$PROJECT_DIR"), "..",
+            "downloads", "flasher", "geogram", "esp32", flasher_model
+        )
+        flasher_bin = os.path.join(flasher_dir, "firmware.bin")
+        if os.path.isdir(flasher_dir):
+            shutil.copy2(bin_dst, flasher_bin)
+            print(f"[Geogram] Flasher firmware synced to: {flasher_bin}")
+        else:
+            print(f"[Geogram] Warning: flasher dir not found: {flasher_dir}")
 
 # Hook into the build process
 env.AddPostAction("$BUILD_DIR/${PROGNAME}.bin", post_build_action)
