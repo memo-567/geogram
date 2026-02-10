@@ -232,85 +232,9 @@ class _FirmwareDownloadDialogState extends State<FirmwareDownloadDialog> {
           );
         }
 
-        // Save firmware.bin directly in the model folder
+        // Save firmware.bin next to device.json
         await File('${modelDir.path}/firmware.bin')
             .writeAsBytes(firmwareResponse.bodyBytes);
-
-        // Create a "latest" version folder with version.json
-        final versionDir = Directory('${modelDir.path}/latest');
-        await versionDir.create(recursive: true);
-
-        // Also save firmware.bin in the version folder for the version system
-        await File('${versionDir.path}/firmware.bin')
-            .writeAsBytes(firmwareResponse.bodyBytes);
-
-        final versionJson = {
-          'version': 'latest',
-          'release_date':
-              DateTime.now().toIso8601String().split('T').first,
-          'size': firmwareResponse.bodyBytes.length,
-        };
-        await File('${versionDir.path}/version.json').writeAsString(
-          const JsonEncoder.withIndent('  ').convert(versionJson),
-        );
-
-        // Update device.json with version entry
-        final versions =
-            (deviceJson['versions'] as List<dynamic>?) ?? [];
-        versions.insert(0, {
-          'version': 'latest',
-          'release_date':
-              DateTime.now().toIso8601String().split('T').first,
-          'size': firmwareResponse.bodyBytes.length,
-        });
-        deviceJson['versions'] = versions;
-        deviceJson['latest_version'] = 'latest';
-        deviceJson['modified_at'] = DateTime.now().toIso8601String();
-
-        await File('${modelDir.path}/device.json').writeAsString(
-          const JsonEncoder.withIndent('  ').convert(deviceJson),
-        );
-      }
-
-      // 6. Download any additional versioned firmware from remote
-      final remoteVersions =
-          deviceJson['versions'] as List<dynamic>? ?? [];
-      for (final vEntry in remoteVersions) {
-        final versionName = (vEntry as Map<String, dynamic>)['version'] as String?;
-        if (versionName == null || versionName == 'latest') continue;
-
-        setState(() {
-          _downloadProgress = 'Downloading v$versionName...';
-        });
-
-        final vDir = Directory('${modelDir.path}/$versionName');
-        await vDir.create(recursive: true);
-
-        // Try to download versioned firmware.bin
-        final vFirmwareUrl =
-            '$_baseUrl/${device.project}/${device.architecture}/${device.model}/$versionName/firmware.bin';
-        try {
-          final vFirmwareResponse = await http.get(Uri.parse(vFirmwareUrl));
-          if (vFirmwareResponse.statusCode == 200) {
-            await File('${vDir.path}/firmware.bin')
-                .writeAsBytes(vFirmwareResponse.bodyBytes);
-          }
-        } catch (_) {
-          // Version firmware not available remotely, skip
-        }
-
-        // Try to download version.json
-        final vJsonUrl =
-            '$_baseUrl/${device.project}/${device.architecture}/${device.model}/$versionName/version.json';
-        try {
-          final vJsonResponse = await http.get(Uri.parse(vJsonUrl));
-          if (vJsonResponse.statusCode == 200) {
-            await File('${vDir.path}/version.json')
-                .writeAsString(vJsonResponse.body);
-          }
-        } catch (_) {
-          // Version metadata not available remotely, skip
-        }
       }
 
       // Mark as downloaded
