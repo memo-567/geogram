@@ -208,7 +208,7 @@ class EspToolProtocol implements FlashProtocol {
 
     // Begin flash operation
     onProgress?.call(FlashProgress.erasing(0.0));
-    await _flashBegin(totalSize, numBlocks, flashWriteSize, 0);
+    await _flashBegin(totalSize, numBlocks, flashWriteSize, config.flashOffset);
 
     // Write firmware in blocks
     for (var i = 0; i < numBlocks; i++) {

@@ -89,6 +89,7 @@ class FlashConfig {
   final String? firmwareUrl;
   final int bootDelayMs;
   final bool stubRequired;
+  final int flashOffset;
 
   const FlashConfig({
     required this.protocol,
@@ -101,6 +102,7 @@ class FlashConfig {
     this.firmwareUrl,
     this.bootDelayMs = 100,
     this.stubRequired = false,
+    this.flashOffset = 0x10000,
   });
 
   factory FlashConfig.fromJson(Map<String, dynamic> json) {
@@ -115,6 +117,7 @@ class FlashConfig {
       firmwareUrl: json['firmware_url'] as String?,
       bootDelayMs: json['boot_delay_ms'] as int? ?? 100,
       stubRequired: json['stub_required'] as bool? ?? false,
+      flashOffset: json['flash_offset'] as int? ?? 0x10000,
     );
   }
 
@@ -129,6 +132,7 @@ class FlashConfig {
         if (firmwareUrl != null) 'firmware_url': firmwareUrl,
         if (bootDelayMs != 100) 'boot_delay_ms': bootDelayMs,
         if (stubRequired) 'stub_required': stubRequired,
+        if (flashOffset != 0x10000) 'flash_offset': flashOffset,
       };
 }
 
