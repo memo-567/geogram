@@ -401,14 +401,6 @@ void main() async {
           );
           await CrashService().clearRecoveredFromCrash();
         }
-
-        // If the foreground service was started from boot, signal that Flutter is ready
-        // This downgrades the boot notification and re-enables keep-alive mechanisms
-        final startedFromBoot = await BLEForegroundService().isStartedFromBoot();
-        if (startedFromBoot) {
-          LogService().log('App was started from boot - signaling boot init complete');
-          await BLEForegroundService().bootInitComplete();
-        }
       }
 
       // Initialize location service (GPS on mobile, IP-based on desktop/web)

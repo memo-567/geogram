@@ -45,9 +45,6 @@
     <!-- Boot completed permission for auto-starting on device reboot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
-    <!-- Full-screen intent permission for launching activity from boot notification -->
-    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
-
     <!-- Exact alarm permission for crash-recovery restart (API 31+) -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
@@ -162,6 +159,7 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
                 <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="dev.geogram.RESTART" />
             </intent-filter>
         </receiver>
 

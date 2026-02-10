@@ -37,12 +37,7 @@ public class BLEForegroundService extends Service {
 
     private static final String TAG = "BLEForegroundService";
     private static final String CHANNEL_ID = "geogram_ble_channel";
-    private static final String BOOT_CHANNEL_ID = "geogram_boot_channel";
     private static final int NOTIFICATION_ID = 1001;
-    private static final int BOOT_NOTIFICATION_ID = 1002;
-
-    // Extra flag to tell MainActivity it was launched from boot
-    public static final String EXTRA_STARTED_FROM_BOOT = "started_from_boot";
 
     // WebSocket keep-alive interval (55 seconds - slightly less than the 60s Dart timer
     // to ensure we always beat the server's idle timeout)
@@ -89,9 +84,6 @@ public class BLEForegroundService extends Service {
 
     // Track if BLE scan keepalive was requested (survives service restart)
     private static boolean bleScanKeepAliveRequested = false;
-
-    // Track if service was started from boot (Flutter engine not yet ready)
-    private static boolean startedFromBoot = false;
 
     // Static reference to method channel for callbacks to Flutter
     private static MethodChannel methodChannel;
@@ -311,16 +303,17 @@ public class BLEForegroundService extends Service {
             isInForeground = true;
         }
 
-        // Handle boot start: show full-screen intent notification to launch Flutter engine
+        // Handle boot start: create headless FlutterEngine
         if ("START_FROM_BOOT".equals(action)) {
-            startedFromBoot = true;
-            showBootNotification();
+            Log.d(TAG, "Started from boot - ensuring FlutterEngine exists");
+            GeogramApplication app = GeogramApplication.getInstance();
+            if (app != null) {
+                app.ensureFlutterEngine();
+            }
         }
 
         // Handle actions
-        if ("BOOT_INIT_COMPLETE".equals(action)) {
-            onBootInitComplete();
-        } else if ("ENABLE_KEEPALIVE".equals(action)) {
+        if ("ENABLE_KEEPALIVE".equals(action)) {
             startKeepAlive();
         } else if ("DISABLE_KEEPALIVE".equals(action)) {
             stopKeepAlive();
@@ -474,6 +467,17 @@ public class BLEForegroundService extends Service {
         stopBleAdvertise();
         stopBleScan();
         releaseWakeLock();
+
+        // Self-restart broadcast (Telegram pattern) — BootReceiver will restart the service
+        try {
+            Intent restartIntent = new Intent("dev.geogram.RESTART");
+            restartIntent.setPackage(getPackageName());
+            sendBroadcast(restartIntent);
+            Log.d(TAG, "Self-restart broadcast sent");
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to send self-restart broadcast: " + e.getMessage());
+        }
+
         super.onDestroy();
     }
 
@@ -820,101 +824,6 @@ public class BLEForegroundService extends Service {
         }
     }
 
-    /**
-     * Show a high-priority boot notification with a full-screen intent.
-     * This reliably launches MainActivity (and thus the Flutter engine) after boot.
-     * - Screen off/locked: full-screen intent fires and opens the activity directly
-     * - Screen on: shows a heads-up notification the user can tap
-     */
-    private void showBootNotification() {
-        Log.d(TAG, "Showing boot notification with full-screen intent");
-
-        // Create intent to launch MainActivity with boot flag
-        Intent launchIntent = new Intent(this, MainActivity.class);
-        launchIntent.putExtra(EXTRA_STARTED_FROM_BOOT, true);
-        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-
-        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            flags |= PendingIntent.FLAG_IMMUTABLE;
-        }
-        PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(
-                this, 2, launchIntent, flags);
-
-        Notification bootNotification = new NotificationCompat.Builder(this, BOOT_CHANNEL_ID)
-                .setContentTitle("Geogram")
-                .setContentText("Starting after reboot...")
-                .setSmallIcon(R.drawable.ic_notification)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setCategory(NotificationCompat.CATEGORY_ALARM)
-                .setFullScreenIntent(fullScreenPendingIntent, true)
-                .setContentIntent(fullScreenPendingIntent)
-                .setAutoCancel(true)
-                .build();
-
-        NotificationManager notificationManager = getSystemService(NotificationManager.class);
-        if (notificationManager != null) {
-            notificationManager.notify(BOOT_NOTIFICATION_ID, bootNotification);
-        }
-    }
-
-    /**
-     * Called when Flutter engine is ready after boot launch.
-     * Removes the boot notification and re-enables keep-alive based on saved state.
-     */
-    private void onBootInitComplete() {
-        Log.d(TAG, "Boot init complete - Flutter engine is ready");
-        startedFromBoot = false;
-
-        // Remove the boot notification
-        NotificationManager notificationManager = getSystemService(NotificationManager.class);
-        if (notificationManager != null) {
-            notificationManager.cancel(BOOT_NOTIFICATION_ID);
-        }
-
-        // Update the normal notification
-        updateNotification();
-
-        // Re-enable keep-alive if station info was saved
-        if (stationUrl != null || stationName != null) {
-            startKeepAlive();
-        }
-
-        // Re-enable BLE advertising if it was previously enabled
-        if (bleKeepAliveRequested) {
-            startBleAdvertise();
-            sendBleAdvertisePing();
-        }
-
-        // Re-enable BLE scan if it was previously enabled
-        if (bleScanKeepAliveRequested) {
-            startBleScan();
-            sendBleScanPing();
-        }
-    }
-
-    /**
-     * Send a BOOT_INIT_COMPLETE action to the service.
-     * Called from MainActivity when the Flutter engine is ready after boot.
-     */
-    public static void bootInitComplete(Context context) {
-        Intent intent = new Intent(context, BLEForegroundService.class);
-        intent.setAction("BOOT_INIT_COMPLETE");
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(intent);
-        } else {
-            context.startService(intent);
-        }
-        Log.d(TAG, "Boot init complete signal sent to service");
-    }
-
-    /**
-     * Check if the service was started from boot (Flutter engine may not be ready yet).
-     */
-    public static boolean wasStartedFromBoot() {
-        return startedFromBoot;
-    }
-
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             // Normal low-priority channel for ongoing BLE notification
@@ -926,19 +835,9 @@ public class BLEForegroundService extends Service {
             channel.setDescription("Keeping connections active");
             channel.setShowBadge(false);
 
-            // High-priority channel for boot notification (required for full-screen intent)
-            NotificationChannel bootChannel = new NotificationChannel(
-                    BOOT_CHANNEL_ID,
-                    "Boot",
-                    NotificationManager.IMPORTANCE_HIGH
-            );
-            bootChannel.setDescription("Auto-start after reboot");
-            bootChannel.setShowBadge(false);
-
             NotificationManager notificationManager = getSystemService(NotificationManager.class);
             if (notificationManager != null) {
                 notificationManager.createNotificationChannel(channel);
-                notificationManager.createNotificationChannel(bootChannel);
             }
         }
     }

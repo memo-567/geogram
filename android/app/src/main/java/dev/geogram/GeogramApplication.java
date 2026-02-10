@@ -17,6 +17,9 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 
+import io.flutter.embedding.engine.FlutterEngine;
+import io.flutter.embedding.engine.FlutterEngineCache;
+import io.flutter.embedding.engine.dart.DartExecutor;
 import io.flutter.plugin.common.MethodChannel;
 
 /**
@@ -31,6 +34,10 @@ import io.flutter.plugin.common.MethodChannel;
 public class GeogramApplication extends Application {
     private static final String TAG = "GeogramApplication";
     private static GeogramApplication instance;
+
+    // Headless FlutterEngine for running Dart without an Activity
+    public static final String ENGINE_ID = "geogram_engine";
+    private FlutterEngine flutterEngine;
 
     // Crash loop prevention
     private static final String PREFS_NAME = "CrashPrefs";
@@ -88,6 +95,93 @@ public class GeogramApplication extends Application {
 
     public static GeogramApplication getInstance() {
         return instance;
+    }
+
+    /**
+     * Create and cache a headless FlutterEngine if one doesn't already exist.
+     * The engine runs main() which initializes all Dart services (BLE, WebSocket, etc.)
+     * without any Activity. When the user later opens the app, MainActivity reuses
+     * the cached engine via provideFlutterEngine().
+     */
+    public void ensureFlutterEngine() {
+        if (flutterEngine != null) {
+            Log.d(TAG, "FlutterEngine already exists, skipping creation");
+            return;
+        }
+
+        if (FlutterEngineCache.getInstance().get(ENGINE_ID) != null) {
+            Log.d(TAG, "FlutterEngine already cached, skipping creation");
+            flutterEngine = FlutterEngineCache.getInstance().get(ENGINE_ID);
+            return;
+        }
+
+        Log.d(TAG, "Creating headless FlutterEngine...");
+        flutterEngine = new FlutterEngine(this);
+
+        // Execute the default Dart entrypoint (main())
+        flutterEngine.getDartExecutor().executeDartEntrypoint(
+            DartExecutor.DartEntrypoint.createDefault()
+        );
+
+        // Cache the engine so MainActivity can reuse it
+        FlutterEngineCache.getInstance().put(ENGINE_ID, flutterEngine);
+
+        // Set up a headless BLE MethodChannel handler using applicationContext
+        MethodChannel bleChannel = new MethodChannel(
+            flutterEngine.getDartExecutor().getBinaryMessenger(),
+            "dev.geogram/ble_service"
+        );
+
+        bleChannel.setMethodCallHandler((call, result) -> {
+            switch (call.method) {
+                case "startBLEService":
+                    BLEForegroundService.start(getApplicationContext());
+                    result.success(true);
+                    break;
+                case "stopBLEService":
+                    BLEForegroundService.stop(getApplicationContext());
+                    result.success(true);
+                    break;
+                case "enableKeepAlive":
+                    String callsign = call.argument("callsign");
+                    String name = call.argument("stationName");
+                    String url = call.argument("stationUrl");
+                    BLEForegroundService.enableKeepAlive(getApplicationContext(), callsign, name, url);
+                    result.success(true);
+                    break;
+                case "disableKeepAlive":
+                    BLEForegroundService.disableKeepAlive(getApplicationContext());
+                    result.success(true);
+                    break;
+                case "enableBleKeepAlive":
+                    BLEForegroundService.enableBleKeepAlive(getApplicationContext());
+                    result.success(true);
+                    break;
+                case "disableBleKeepAlive":
+                    BLEForegroundService.disableBleKeepAlive(getApplicationContext());
+                    result.success(true);
+                    break;
+                case "enableBleScanKeepAlive":
+                    BLEForegroundService.enableBleScanKeepAlive(getApplicationContext());
+                    result.success(true);
+                    break;
+                case "disableBleScanKeepAlive":
+                    BLEForegroundService.disableBleScanKeepAlive(getApplicationContext());
+                    result.success(true);
+                    break;
+                case "verifyChannel":
+                    result.success(true);
+                    break;
+                default:
+                    result.notImplemented();
+                    break;
+            }
+        });
+
+        // Set the method channel on the service for native→Dart pings
+        BLEForegroundService.setMethodChannel(bleChannel);
+
+        Log.d(TAG, "FlutterEngine created and cached with key: " + ENGINE_ID);
     }
 
     /**

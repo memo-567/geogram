@@ -11,13 +11,12 @@ import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.provider.MediaStore
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 
@@ -48,6 +47,10 @@ class MainActivity : FlutterActivity() {
         Pair(0x0403, 0x6001), // FTDI FT232
         Pair(0x0403, 0x6015), // FTDI FT231X
     )
+
+    override fun provideFlutterEngine(context: Context): FlutterEngine? {
+        return FlutterEngineCache.getInstance().get(GeogramApplication.ENGINE_ID)
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -93,65 +96,46 @@ class MainActivity : FlutterActivity() {
         bleChannel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "startBLEService" -> {
-                    BLEForegroundService.start(this)
+                    BLEForegroundService.start(applicationContext)
                     result.success(true)
                 }
                 "stopBLEService" -> {
-                    BLEForegroundService.stop(this)
+                    BLEForegroundService.stop(applicationContext)
                     result.success(true)
                 }
                 "enableKeepAlive" -> {
-                    // Enable WebSocket keep-alive in the foreground service
                     val callsign = call.argument<String>("callsign")
                     val stationName = call.argument<String>("stationName")
                     val stationUrl = call.argument<String>("stationUrl")
-                    BLEForegroundService.enableKeepAlive(this, callsign, stationName, stationUrl)
+                    BLEForegroundService.enableKeepAlive(applicationContext, callsign, stationName, stationUrl)
                     result.success(true)
                 }
                 "disableKeepAlive" -> {
-                    // Disable WebSocket keep-alive in the foreground service
-                    BLEForegroundService.disableKeepAlive(this)
+                    BLEForegroundService.disableKeepAlive(applicationContext)
                     result.success(true)
                 }
                 "enableBleKeepAlive" -> {
-                    // Enable BLE advertising keep-alive in the foreground service
-                    BLEForegroundService.enableBleKeepAlive(this)
+                    BLEForegroundService.enableBleKeepAlive(applicationContext)
                     result.success(true)
                 }
                 "disableBleKeepAlive" -> {
-                    // Disable BLE advertising keep-alive in the foreground service
-                    BLEForegroundService.disableBleKeepAlive(this)
+                    BLEForegroundService.disableBleKeepAlive(applicationContext)
                     result.success(true)
                 }
                 "enableBleScanKeepAlive" -> {
-                    // Enable BLE scan keep-alive in the foreground service (for proximity detection)
-                    BLEForegroundService.enableBleScanKeepAlive(this)
+                    BLEForegroundService.enableBleScanKeepAlive(applicationContext)
                     result.success(true)
                 }
                 "disableBleScanKeepAlive" -> {
-                    // Disable BLE scan keep-alive in the foreground service
-                    BLEForegroundService.disableBleScanKeepAlive(this)
+                    BLEForegroundService.disableBleScanKeepAlive(applicationContext)
                     result.success(true)
                 }
                 "verifyChannel" -> {
-                    // Simple channel verification - if we get here, the channel is working
                     result.success(true)
-                }
-                "bootInitComplete" -> {
-                    // Flutter engine is ready after boot launch - notify service
-                    BLEForegroundService.bootInitComplete(this)
-                    result.success(true)
-                }
-                "isStartedFromBoot" -> {
-                    // Check if the service was started from boot
-                    result.success(BLEForegroundService.wasStartedFromBoot())
                 }
                 else -> result.notImplemented()
             }
         }
-
-        // If launched from boot, auto-minimize after Flutter engine initializes
-        handleBootLaunch(intent)
 
         // Crash handling channel for Flutter-Native crash communication
         val crashChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CRASH_CHANNEL)
@@ -374,25 +358,8 @@ class MainActivity : FlutterActivity() {
      */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        handleBootLaunch(intent)
         handleUsbIntent(intent)
         handleFileViewIntent(intent)
-    }
-
-    /**
-     * If launched from boot (via full-screen intent notification), send the activity
-     * to the background after a brief delay so the Flutter engine can initialize.
-     * The user doesn't need to see the app — it just needs to start the engine.
-     */
-    private fun handleBootLaunch(intent: Intent?) {
-        if (intent?.getBooleanExtra(BLEForegroundService.EXTRA_STARTED_FROM_BOOT, false) == true) {
-            android.util.Log.d("MainActivity", "Launched from boot - will move to background after engine init")
-            // Give Flutter engine time to initialize, then move to background
-            Handler(Looper.getMainLooper()).postDelayed({
-                moveTaskToBack(true)
-                android.util.Log.d("MainActivity", "Moved to background after boot launch")
-            }, 2000)
-        }
     }
 
     /**
@@ -527,8 +494,6 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
-        // Clear method channel to prevent stale reference when engine is destroyed
-        BLEForegroundService.clearMethodChannel()
         bluetoothClassicPlugin?.dispose()
         bluetoothClassicPlugin = null
         wifiDirectPlugin?.dispose()

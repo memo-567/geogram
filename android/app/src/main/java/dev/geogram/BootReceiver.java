@@ -36,7 +36,8 @@ public class BootReceiver extends BroadcastReceiver {
 
         if (Intent.ACTION_BOOT_COMPLETED.equals(action) ||
             "android.intent.action.QUICKBOOT_POWERON".equals(action) ||
-            "com.htc.intent.action.QUICKBOOT_POWERON".equals(action)) {
+            "com.htc.intent.action.QUICKBOOT_POWERON".equals(action) ||
+            "dev.geogram.RESTART".equals(action)) {
 
             // Check if auto-start is enabled in settings (defaults to true)
             SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
