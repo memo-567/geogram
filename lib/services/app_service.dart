@@ -830,6 +830,7 @@ class AppService {
         final folderName = entry.name;
         if (folderName == 'files') continue; // already added above
         if (folderName == 'logs') continue; // legacy system folder, skip
+        if (folderName == 'mirror') continue; // internal sync folder, not an app
         final storagePath = _profileStorage!.getAbsolutePath(folderName);
         if (singleInstanceTypesConst.contains(folderName)) {
           results.add(_createMinimalApp(folderName, storagePath));
@@ -883,6 +884,7 @@ class AppService {
         final folderName = entry.name;
         if (folderName == 'files') continue; // already added above
         if (folderName == 'logs') continue; // legacy system folder, skip
+        if (folderName == 'mirror') continue; // internal sync folder, not an app
         try {
           if (singleInstanceTypesConst.contains(folderName)) {
             // Known single-instance type — skip app.js entirely
