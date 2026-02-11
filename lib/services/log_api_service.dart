@@ -3254,11 +3254,23 @@ class LogApiService {
         metadata['verified'] = 'true';
       }
 
-      final message = ChatMessage.now(
-        author: author,
-        content: content,
-        metadata: metadata,
-      );
+      ChatMessage message;
+      if (createdAt != null) {
+        final dt = DateTime.fromMillisecondsSinceEpoch(createdAt * 1000);
+        final timestampStr = ChatMessage.formatTimestamp(dt);
+        message = ChatMessage(
+          author: author,
+          timestamp: timestampStr,
+          content: content,
+          metadata: metadata,
+        );
+      } else {
+        message = ChatMessage.now(
+          author: author,
+          content: content,
+          metadata: metadata,
+        );
+      }
 
       // Use DirectMessageService to save the incoming DM
       // The senderCallsign is the "other" party in the DM conversation
