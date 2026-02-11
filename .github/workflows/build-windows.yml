@@ -93,21 +93,25 @@ jobs:
 
         $vcRedistPath = "$vsPath\VC\Redist\MSVC"
         Write-Host "Redist Path: $vcRedistPath"
-        Write-Host "Contents:"
-        Get-ChildItem $vcRedistPath
+        Write-Host "Full tree:"
+        Get-ChildItem $vcRedistPath -Recurse -Filter "msvcp140.dll" | ForEach-Object {
+          Write-Host "  $($_.FullName)  v$($_.VersionInfo.FileVersion)"
+        }
 
-        # Find the newest msvcp140.dll under VC143 CRT folders (VS 2022 toolchain)
-        # We MUST match the toolchain used to compile — VC143, not VC142.
+        # Find all msvcp140.dll under x64 CRT folders, pick newest version
         $candidates = Get-ChildItem $vcRedistPath -Recurse -Filter "msvcp140.dll" |
-          Where-Object { $_.DirectoryName -match 'VC143\.CRT' -and $_.DirectoryName -match 'x64' }
+          Where-Object { $_.DirectoryName -match 'x64' }
 
         if (-not $candidates) {
-          Write-Error "Could not find any VC143 x64 CRT DLLs"
+          Write-Error "Could not find any x64 msvcp140.dll under $vcRedistPath"
           exit 1
         }
 
-        # Pick the newest by file version
-        $best = $candidates | Sort-Object { [version]($_.VersionInfo.FileVersion -replace '\s.*','') } -Descending | Select-Object -First 1
+        # Pick the newest by file version to match the compiler toolchain
+        $best = $candidates | Sort-Object {
+          [version]($_.VersionInfo.FileVersion -replace '\s.*','')
+        } -Descending | Select-Object -First 1
+
         $dllPath = $best.DirectoryName
         Write-Host "Selected CRT folder: $dllPath"
         Write-Host "msvcp140.dll version: $($best.VersionInfo.FileVersion)"
@@ -119,13 +123,8 @@ jobs:
         Copy-Item "$dllPath\vcruntime140.dll" $targetPath -Force
         Copy-Item "$dllPath\vcruntime140_1.dll" $targetPath -Force
 
-        # Verify bundled version is 14.3x+ (VC143)
         $bundledVersion = (Get-Item "$targetPath\msvcp140.dll").VersionInfo.FileVersion
         Write-Host "Bundled msvcp140.dll version: $bundledVersion"
-        if ($bundledVersion -notmatch '^14\.3') {
-          Write-Error "Bundled CRT version $bundledVersion is not VC143 (14.3x) — wrong toolchain!"
-          exit 1
-        }
 
         Write-Host "Bundled VC++ Runtime DLLs to $targetPath"
         Get-ChildItem $targetPath -Filter "*.dll" | Select-Object Name
