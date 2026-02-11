@@ -259,6 +259,18 @@ jobs:
         Stop-Process -Id $proc.Id -Force
         Write-Host "Smoke test passed"
 
+    - name: Create portable archive
+      run: |
+        cd build/windows/x64/runner/Release
+        Compress-Archive -Path * -DestinationPath ../../../../../geogram-windows-x64.zip
+
+    - name: Upload portable artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: geogram-windows-x64
+        path: geogram-windows-x64.zip
+        retention-days: 30
+
     - name: Extract version for installer
       id: version
       shell: bash
@@ -271,29 +283,30 @@ jobs:
       run: choco install innosetup -y --no-progress
 
     - name: Build installer
-      shell: cmd
-      run: >
-        "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-        /DMyAppVersion=${{ steps.version.outputs.version }}
-        installer\geogram.iss
+      continue-on-error: true
+      shell: powershell
+      run: |
+        $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+        Write-Host "ISCC path exists: $(Test-Path $iscc)"
+        Write-Host "Version output from step: ${{ steps.version.outputs.version }}"
+        Write-Host "Running ISCC..."
+        & $iscc /DMyAppVersion=${{ steps.version.outputs.version }} installer\geogram.iss
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host "ISCC failed with exit code $LASTEXITCODE"
+          Write-Host "Listing installer dir contents:"
+          Get-ChildItem installer\ -Recurse
+          Write-Host "Listing build output:"
+          Test-Path "build\windows\x64\runner\Release\geogram.exe"
+          exit $LASTEXITCODE
+        }
 
     - name: Upload installer artifact
+      if: steps.version.outcome == 'success'
       uses: actions/upload-artifact@v4
       with:
         name: geogram-windows-x64-setup
         path: build/installer/geogram-windows-x64-setup.exe
-        retention-days: 30
-
-    - name: Create portable archive
-      run: |
-        cd build/windows/x64/runner/Release
-        Compress-Archive -Path * -DestinationPath ../../../../../geogram-windows-x64.zip
-
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: geogram-windows-x64
-        path: geogram-windows-x64.zip
+        if-no-files-found: ignore
         retention-days: 30
 
     - name: Upload to Release
