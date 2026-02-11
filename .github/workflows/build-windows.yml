@@ -25,7 +25,7 @@ jobs:
     - name: Setup Flutter
       uses: subosito/flutter-action@v2
       with:
-        channel: 'stable'
+        flutter-version: '3.38.5'
         cache: true
 
     - name: Update version from git
@@ -157,6 +157,19 @@ jobs:
           }
         }
 
+        # Also bundle providers_shared if it exists
+        if (-not (Test-Path "$targetPath\onnxruntime_providers_shared.dll")) {
+          $providersDll = Get-ChildItem -Path "build\windows\x64" -Recurse -Filter "onnxruntime_providers_shared.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($providersDll) {
+            Copy-Item $providersDll.FullName $targetPath -Force
+            Write-Host "Bundled onnxruntime_providers_shared.dll"
+          } else {
+            Write-Host "onnxruntime_providers_shared.dll not found in build tree (may not be needed)"
+          }
+        } else {
+          Write-Host "onnxruntime_providers_shared.dll already bundled"
+        }
+
         Write-Host "`nAll DLLs in release:"
         Get-ChildItem $targetPath -Filter "*.dll" | Select-Object Name, Length
 
@@ -176,10 +189,25 @@ jobs:
 
         # Check for critical DLLs
         $criticalDlls = @(
+          # Flutter core
           "flutter_windows.dll",
-          "msvcp140.dll",
-          "vcruntime140.dll",
-          "onnxruntime.dll"
+          # VC++ Runtime
+          "msvcp140.dll", "msvcp140_1.dll", "vcruntime140.dll", "vcruntime140_1.dll",
+          # Plugin DLLs
+          "ble_peripheral_plugin.dll", "file_selector_windows_plugin.dll",
+          "flutter_onnxruntime_plugin.dll", "flutter_webrtc_plugin.dll",
+          "geolocator_windows_plugin.dll", "media_kit_libs_windows_video_plugin.dll",
+          "media_kit_video_plugin.dll", "objectbox_flutter_libs_plugin.dll",
+          "pdfx_plugin.dll", "permission_handler_windows_plugin.dll",
+          "record_windows_plugin.dll", "screen_retriever_windows_plugin.dll",
+          "share_plus_plugin.dll", "sqlite3_flutter_libs_plugin.dll",
+          "url_launcher_windows_plugin.dll", "window_manager_plugin.dll",
+          # Native libraries
+          "onnxruntime.dll", "libwebrtc.dll", "objectbox.dll", "pdfium.dll",
+          "sqlite3.dll", "libmpv-2.dll", "d3dcompiler_47.dll", "libEGL.dll",
+          "libGLESv2.dll", "vk_swiftshader.dll", "vulkan-1.dll", "zlib.dll",
+          # FFI plugins
+          "flutter_pty.dll", "flutter_zxing.dll"
         )
 
         $missing = @()
@@ -199,6 +227,39 @@ jobs:
 
         Write-Host ""
         Write-Host "=== DLL verification passed ==="
+
+    - name: Analyze dependencies
+      shell: powershell
+      run: |
+        $targetPath = "build\windows\x64\runner\Release"
+        $exe = "$targetPath\geogram.exe"
+
+        # Use dumpbin to list dependencies of the main exe
+        Write-Host "=== geogram.exe dependencies ==="
+        & dumpbin /dependents $exe 2>$null | Select-String "\.dll"
+
+        # Check each DLL in the release folder for its dependencies
+        Write-Host "`n=== Verifying all DLLs are loadable ==="
+        Get-ChildItem "$targetPath\*.dll" | ForEach-Object {
+          $deps = & dumpbin /dependents $_.FullName 2>$null | Select-String "\.dll"
+          Write-Host "`n$($_.Name) depends on:"
+          $deps | ForEach-Object { Write-Host "  $_" }
+        }
+
+    - name: Smoke-test launch
+      shell: powershell
+      run: |
+        $exe = "build\windows\x64\runner\Release\geogram.exe"
+        Write-Host "Attempting to launch geogram.exe..."
+        $proc = Start-Process -FilePath $exe -PassThru -ErrorAction Stop
+        Start-Sleep -Seconds 5
+        if ($proc.HasExited) {
+          Write-Error "Process exited early with code $($proc.ExitCode)"
+          exit 1
+        }
+        Write-Host "Process running (PID: $($proc.Id)), stopping..."
+        Stop-Process -Id $proc.Id -Force
+        Write-Host "Smoke test passed"
 
     - name: Create portable archive
       run: |
