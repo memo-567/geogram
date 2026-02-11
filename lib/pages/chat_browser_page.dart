@@ -673,12 +673,16 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       }
 
       _setStateIfMounted(() {
-        _stationRooms = rooms;
-        _stationReachable = true; // Successfully fetched - device is reachable
+        if (rooms.isNotEmpty) {
+          _stationRooms = rooms;
+        }
+        _stationReachable = rooms.isNotEmpty;
         _loadingRelayRooms = false;
       });
 
-      await _ensureWebSocketConnection(url);
+      if (rooms.isNotEmpty) {
+        await _ensureWebSocketConnection(url);
+      }
     } catch (e) {
       LogService().log('DEBUG _fetchRelayRoomsFromRemote: fetch failed: $e');
       _setStateIfMounted(() {
@@ -697,7 +701,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       }
 
       _setStateIfMounted(() {
-        _stationRooms = rooms;
+        if (rooms.isNotEmpty) {
+          _stationRooms = rooms;
+        }
         _stationReachable = rooms.isNotEmpty;
         _loadingRelayRooms = false;
       });
@@ -2976,7 +2982,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          _stationRooms.first.stationName,
+                          _formatStationDisplayName(
+                            _stationRooms.first.stationName,
+                            _lastStationUrl ?? _stationRooms.first.stationUrl,
+                          ),
                           style: theme.textTheme.titleMedium?.copyWith(
                             fontWeight: FontWeight.bold,
                           ),
@@ -3045,6 +3054,16 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         .replaceFirst('http://', '');
   }
 
+  /// Format station display name: "Title (domain)" when title is available,
+  /// otherwise just the stripped domain
+  String _formatStationDisplayName(String name, String url) {
+    final strippedUrl = url.isNotEmpty ? _stripUrlProtocol(url) : '';
+    if (name.isNotEmpty && !_isUrlLike(name) && name != strippedUrl) {
+      return strippedUrl.isNotEmpty ? '$name ($strippedUrl)' : name;
+    }
+    return strippedUrl.isNotEmpty ? strippedUrl : name;
+  }
+
   /// Format cached device title: show "Nickname (CALLSIGN)" when nickname available,
   /// URL domain when no nickname, callsign as last resort
   String _formatCachedDeviceTitle(CachedDeviceRooms device) {
@@ -3059,7 +3078,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         name != callsign;
 
     if (hasNickname) {
-      // Show "Nickname (CALLSIGN)" when we have a proper nickname
+      // Show "Nickname (domain)" when we have a proper nickname and URL
+      if (url != null && url.isNotEmpty) {
+        return '$name (${_stripUrlProtocol(url)})';
+      }
       return '$name ($callsign)';
     }
 

@@ -199,7 +199,10 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
         name != callsign;
 
     if (hasNickname) {
-      // Show "Nickname (CALLSIGN)" when we have a proper nickname
+      // Show "Nickname (domain)" when we have a proper nickname and URL
+      if (url != null && url.isNotEmpty) {
+        return '$name (${_stripUrlProtocol(url)})';
+      }
       return callsign != null ? '$name ($callsign)' : name;
     }
 

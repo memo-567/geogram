@@ -121,10 +121,12 @@ class RelayCacheService {
           : (data['stationUrl'] as String? ?? '');
 
       return roomsData.map((r) {
+        final roomJson = r as Map<String, dynamic>;
+        final savedName = roomJson['station_name'] as String? ?? '';
         return StationChatRoom.fromJson(
-          r as Map<String, dynamic>,
+          roomJson,
           effectiveRelayUrl,
-          deviceCallsign,
+          savedName.isNotEmpty ? savedName : deviceCallsign,
         );
       }).toList();
     } catch (e) {
