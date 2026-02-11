@@ -114,7 +114,7 @@ class _FilesBrowserPageState extends State<FilesBrowserPage> {
     final storage = AppService().profileStorage;
     if (storage != null && storage.isEncrypted) {
       final basePath = storage.basePath;
-      if (path.startsWith('$basePath/')) {
+      if (p.isWithin(basePath, path)) {
         _openEncryptedFile(path, storage);
         return;
       }

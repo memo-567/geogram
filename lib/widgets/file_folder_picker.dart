@@ -197,6 +197,7 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     // Initialize directory paths immediately to avoid late init errors
     final initial = widget.initialDirectory ??
         Platform.environment['HOME'] ??
+        Platform.environment['USERPROFILE'] ??
         (Platform.isAndroid ? '/storage/emulated/0' : '/');
     _baseDirectory = initial;
     _currentDirectory = Directory(initial);
@@ -227,7 +228,7 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     if (storage == null) return false;
     final basePath = storage.basePath;
     final dirPath = _currentDirectory.path;
-    return dirPath == basePath || dirPath.startsWith('$basePath/');
+    return dirPath == basePath || p.isWithin(basePath, dirPath);
   }
 
   /// Load directory contents from ProfileStorage instead of raw filesystem.
@@ -239,7 +240,7 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     // Compute relative path within the storage
     final relativePath = dirPath == basePath
         ? ''
-        : dirPath.substring(basePath.length + 1);
+        : p.relative(dirPath, from: basePath);
 
     try {
       final entries = await storage.listDirectory(relativePath);
@@ -366,6 +367,56 @@ class FileFolderPickerState extends State<FileFolderPicker> {
             }
           }
         } catch (_) {}
+      }
+    } else if (Platform.isWindows) {
+      // Home directory (USERPROFILE on Windows)
+      final userProfile = Platform.environment['USERPROFILE'];
+      if (userProfile != null) {
+        locations.add(StorageLocation(
+          name: 'Home',
+          path: userProfile,
+          icon: Icons.home_rounded,
+        ));
+
+        // Common user folders
+        for (final entry in [
+          ('Desktop', Icons.desktop_windows_rounded),
+          ('Documents', Icons.description_rounded),
+          ('Downloads', Icons.download_rounded),
+          ('Pictures', Icons.image_rounded),
+          ('Music', Icons.music_note_rounded),
+          ('Videos', Icons.movie_rounded),
+        ]) {
+          final dir = Directory(p.join(userProfile, entry.$1));
+          if (await dir.exists()) {
+            locations.add(StorageLocation(
+              name: entry.$1,
+              path: dir.path,
+              icon: entry.$2,
+            ));
+          }
+        }
+      }
+
+      // Detect all available drives (A:\ through Z:\)
+      for (int i = 65; i <= 90; i++) {
+        final letter = String.fromCharCode(i);
+        final drivePath = '$letter:\\';
+        final driveDir = Directory(drivePath);
+        try {
+          if (await driveDir.exists()) {
+            locations.add(StorageLocation(
+              name: '$letter:',
+              path: drivePath,
+              icon: letter == 'C'
+                  ? Icons.computer_rounded
+                  : Icons.storage_rounded,
+              isRemovable: letter != 'C',
+            ));
+          }
+        } catch (_) {
+          // Drive not accessible — skip
+        }
       }
     }
 
@@ -592,7 +643,7 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     // Skip folder size calculation for paths inside profile storage
     if (widget.profileStorage != null) {
       final basePath = widget.profileStorage!.basePath;
-      if (folderPath == basePath || folderPath.startsWith('$basePath/')) return;
+      if (folderPath == basePath || p.isWithin(basePath, folderPath)) return;
     }
     if (_calculatingFolders.contains(folderPath)) return;
     _calculatingFolders.add(folderPath);
@@ -1235,6 +1286,10 @@ class FileFolderPickerState extends State<FileFolderPicker> {
                     } else {
                       path = subParts.join(Platform.pathSeparator);
                     }
+                  }
+                  // On Windows, bare drive letter 'C:' must become 'C:\'
+                  if (Platform.isWindows && path.length == 2 && path.endsWith(':')) {
+                    path = '$path\\';
                   }
                   _navigateTo(Directory(path));
                 },

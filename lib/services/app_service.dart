@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
+import 'package:path/path.dart' as p;
 import 'package:flutter/foundation.dart' show ValueNotifier, kIsWeb;
 import 'package:mime/mime.dart';
 import '../models/app.dart';
@@ -162,7 +163,7 @@ class AppService {
       throw Exception('AppService not initialized. Call init() first.');
     }
 
-    _appsDir = Directory('${_devicesDir!.path}/$sanitizedCallsign');
+    _appsDir = Directory(p.join(_devicesDir!.path, sanitizedCallsign));
 
     // Check if this profile uses encrypted storage
     _useEncryptedStorage = _encryptedStorageService.isEncryptedStorageEnabled(sanitizedCallsign);
@@ -4426,7 +4427,7 @@ window.APP_DATA_FULL = $jsonData;
       return;
     }
 
-    final callsignDir = Directory('${_devicesDir!.path}/$targetCallsign');
+    final callsignDir = Directory(p.join(_devicesDir!.path, targetCallsign));
     if (!await callsignDir.exists()) {
       stderr.writeln('Callsign directory not found: ${callsignDir.path}');
       return;
@@ -4499,7 +4500,7 @@ window.APP_DATA_FULL = $jsonData;
     final posts = <Map<String, dynamic>>[];
 
     try {
-      final callsignDir = Directory('${_devicesDir!.path}/$callsign');
+      final callsignDir = Directory(p.join(_devicesDir!.path, callsign));
       if (!await callsignDir.exists()) return posts;
 
       // Look for blog apps
@@ -4548,7 +4549,7 @@ window.APP_DATA_FULL = $jsonData;
     final now = DateTime.now();
 
     try {
-      final callsignDir = Directory('${_devicesDir!.path}/$callsign');
+      final callsignDir = Directory(p.join(_devicesDir!.path, callsign));
       if (!await callsignDir.exists()) return events;
 
       // Look for events apps
@@ -4604,7 +4605,7 @@ window.APP_DATA_FULL = $jsonData;
     int count = 0;
 
     try {
-      final callsignDir = Directory('${_devicesDir!.path}/$callsign');
+      final callsignDir = Directory(p.join(_devicesDir!.path, callsign));
       if (!await callsignDir.exists()) return count;
 
       // Look for places apps
@@ -4648,7 +4649,7 @@ window.APP_DATA_FULL = $jsonData;
     final rooms = <Map<String, dynamic>>[];
 
     try {
-      final callsignDir = Directory('${_devicesDir!.path}/$callsign');
+      final callsignDir = Directory(p.join(_devicesDir!.path, callsign));
       if (!await callsignDir.exists()) return rooms;
 
       // Look for chat apps

@@ -129,7 +129,7 @@ class FilesystemProfileStorage extends ProfileStorage {
   FilesystemProfileStorage(this._basePath);
 
   @override
-  String get basePath => _basePath;
+  String get basePath => p.normalize(_basePath);
 
   @override
   bool get isEncrypted => false;
@@ -137,7 +137,7 @@ class FilesystemProfileStorage extends ProfileStorage {
   @override
   String getAbsolutePath(String relativePath) {
     if (relativePath.isEmpty) return _basePath;
-    return p.join(_basePath, relativePath);
+    return p.normalize(p.join(_basePath, relativePath));
   }
 
   @override
@@ -274,7 +274,7 @@ class EncryptedProfileStorage extends ProfileStorage {
         _encryptedService = encryptedService ?? EncryptedStorageService();
 
   @override
-  String get basePath => _basePath;
+  String get basePath => p.normalize(_basePath);
 
   @override
   bool get isEncrypted => true;
@@ -283,7 +283,7 @@ class EncryptedProfileStorage extends ProfileStorage {
   String getAbsolutePath(String relativePath) {
     // Return virtual path for encrypted storage
     if (relativePath.isEmpty) return _basePath;
-    return p.join(_basePath, relativePath);
+    return p.normalize(p.join(_basePath, relativePath));
   }
 
   @override
@@ -432,16 +432,16 @@ class ScopedProfileStorage extends ProfileStorage {
 
     if (absoluteAppPath.startsWith(basePath)) {
       relativePath = absoluteAppPath.substring(basePath.length);
-      // Clean up leading/trailing slashes
-      while (relativePath.startsWith('/')) {
+      // Clean up leading/trailing slashes — handle both / and \
+      while (relativePath.startsWith('/') || relativePath.startsWith('\\')) {
         relativePath = relativePath.substring(1);
       }
-      while (relativePath.endsWith('/')) {
+      while (relativePath.endsWith('/') || relativePath.endsWith('\\')) {
         relativePath = relativePath.substring(0, relativePath.length - 1);
       }
     } else {
       // Fallback: use last path component
-      relativePath = absoluteAppPath.split('/').where((s) => s.isNotEmpty).lastOrNull ?? '';
+      relativePath = p.basename(absoluteAppPath);
     }
 
     return ScopedProfileStorage(baseStorage, relativePath);
@@ -454,7 +454,7 @@ class ScopedProfileStorage extends ProfileStorage {
   }
 
   @override
-  String get basePath => _inner.getAbsolutePath(_prefix);
+  String get basePath => p.normalize(_inner.getAbsolutePath(_prefix));
 
   @override
   bool get isEncrypted => _inner.isEncrypted;
