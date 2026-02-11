@@ -267,6 +267,9 @@ jobs:
         echo "version=$VERSION" >> "$GITHUB_OUTPUT"
         echo "Installer version: $VERSION"
 
+    - name: Install Inno Setup
+      run: choco install innosetup -y --no-progress
+
     - name: Build installer
       shell: cmd
       run: >
