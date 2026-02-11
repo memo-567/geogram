@@ -662,6 +662,7 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
   final AppThemeService _themeService = AppThemeService();
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   EventSubscription<DMNotificationTappedEvent>? _dmNotificationSubscription;
+  EventSubscription<NavigateToDevicesEvent>? _navigateToDevicesSubscription;
   EventSubscription<TransferOfferReceivedEvent>? _transferOfferSubscription;
   EventSubscription<MirrorPairCompletedEvent>? _mirrorPairSubscription;
 
@@ -682,6 +683,11 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
         'GeogramApp: DM notification tapped for ${event.targetCallsign}',
       );
       _navigateToDMChat(event.targetCallsign);
+    });
+
+    // Subscribe to navigate-to-devices events (e.g., summary notification tap)
+    _navigateToDevicesSubscription = EventBus().on<NavigateToDevicesEvent>((_) {
+      DebugController().navigateToPanel(2);
     });
 
     // Subscribe to incoming P2P transfer offers
@@ -728,6 +734,7 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _themeService.removeListener(_onThemeChanged);
     _dmNotificationSubscription?.cancel();
+    _navigateToDevicesSubscription?.cancel();
     _transferOfferSubscription?.cancel();
     _mirrorPairSubscription?.cancel();
     // Close all encrypted storage connections
@@ -781,13 +788,10 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
 
     switch (action.type) {
       case 'dm':
-        // Follow test script pattern: navigate to devices panel first, wait, then open DM
-        print('NOTIFICATION_DEBUG: Calling navigateToPanel(2)');
+        _navigateToDMChat(action.data);
+        break;
+      case 'nav':
         DebugController().navigateToPanel(2); // Devices panel
-        Future.delayed(const Duration(seconds: 2), () {
-          print('NOTIFICATION_DEBUG: Calling triggerOpenDM(${action.data})');
-          DebugController().triggerOpenDM(callsign: action.data);
-        });
         break;
       case 'chat':
         // Future: navigate to chat room

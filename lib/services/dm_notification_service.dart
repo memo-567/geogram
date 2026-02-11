@@ -143,6 +143,9 @@ class DMNotificationService {
       LogService().log('DMNotificationService: App launched from notification with payload: $payload');
       if (payload != null && payload.startsWith('dm:')) {
         final fromCallsign = payload.substring(3);
+        // Clear SharedPreferences to prevent double handling by _checkPendingNotification
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove(_pendingActionKey);
         // Fire event after a short delay to ensure app UI is ready
         Future.delayed(const Duration(milliseconds: 500), () {
           EventBus().fire(DMNotificationTappedEvent(targetCallsign: fromCallsign));
@@ -457,19 +460,19 @@ class DMNotificationService {
     // Parse payload (format: "type:data", e.g., "dm:CALLSIGN")
     final colonIndex = payload.indexOf(':');
     if (colonIndex > 0) {
-      pendingAction = NotificationAction(
-        type: payload.substring(0, colonIndex),
-        data: payload.substring(colonIndex + 1),
-      );
-      print('NOTIFICATION_DEBUG: pendingAction SET: type=${payload.substring(0, colonIndex)}, data=${payload.substring(colonIndex + 1)}');
+      final type = payload.substring(0, colonIndex);
+      final data = payload.substring(colonIndex + 1);
+      print('NOTIFICATION_DEBUG: parsed type=$type, data=$data');
 
-      // Also fire event for immediate handling if app is active in foreground
-      if (payload.startsWith('dm:')) {
-        print('NOTIFICATION_DEBUG: Firing DMNotificationTappedEvent for ${payload.substring(3)}');
-        EventBus().fire(DMNotificationTappedEvent(
-          targetCallsign: payload.substring(3),
-        ));
+      // Fire event for immediate navigation (foreground + background resume)
+      if (type == 'dm') {
+        print('NOTIFICATION_DEBUG: Firing DMNotificationTappedEvent for $data');
+        EventBus().fire(DMNotificationTappedEvent(targetCallsign: data));
+      } else if (type == 'nav') {
+        EventBus().fire(NavigateToDevicesEvent());
       }
+      // Don't set pendingAction — the event handles immediate cases,
+      // SharedPreferences handles cold-start via _checkPendingNotification()
     } else {
       print('NOTIFICATION_DEBUG: No colon in payload, cannot parse');
     }
@@ -567,7 +570,7 @@ class DMNotificationService {
       'Geogram',
       '$_totalMessageCount new messages',
       notificationDetails,
-      payload: 'messages',
+      payload: 'nav:devices',
     );
   }
 }
