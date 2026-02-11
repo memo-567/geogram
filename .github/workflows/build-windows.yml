@@ -91,37 +91,26 @@ jobs:
         $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
         Write-Host "VS Path: $vsPath"
 
-        # Find the CRT folder - could be under v143, v142, or versioned folders
         $vcRedistPath = "$vsPath\VC\Redist\MSVC"
         Write-Host "Redist Path: $vcRedistPath"
         Write-Host "Contents:"
         Get-ChildItem $vcRedistPath
 
-        # Look for the DLLs in all possible locations
-        $dllPath = $null
-        $searchPaths = @(
-          "$vcRedistPath\v143\x64\Microsoft.VC143.CRT",
-          "$vcRedistPath\v142\x64\Microsoft.VC142.CRT"
-        )
+        # Find the newest msvcp140.dll under VC143 CRT folders (VS 2022 toolchain)
+        # We MUST match the toolchain used to compile — VC143, not VC142.
+        $candidates = Get-ChildItem $vcRedistPath -Recurse -Filter "msvcp140.dll" |
+          Where-Object { $_.DirectoryName -match 'VC143\.CRT' -and $_.DirectoryName -match 'x64' }
 
-        # Also check versioned folders (e.g., 14.38.33135)
-        Get-ChildItem $vcRedistPath -Directory | ForEach-Object {
-          $searchPaths += "$($_.FullName)\x64\Microsoft.VC143.CRT"
-          $searchPaths += "$($_.FullName)\x64\Microsoft.VC142.CRT"
-        }
-
-        foreach ($path in $searchPaths) {
-          if (Test-Path "$path\msvcp140.dll") {
-            $dllPath = $path
-            Write-Host "Found DLLs at: $dllPath"
-            break
-          }
-        }
-
-        if (-not $dllPath) {
-          Write-Error "Could not find VC++ Runtime DLLs"
+        if (-not $candidates) {
+          Write-Error "Could not find any VC143 x64 CRT DLLs"
           exit 1
         }
+
+        # Pick the newest by file version
+        $best = $candidates | Sort-Object { [version]($_.VersionInfo.FileVersion -replace '\s.*','') } -Descending | Select-Object -First 1
+        $dllPath = $best.DirectoryName
+        Write-Host "Selected CRT folder: $dllPath"
+        Write-Host "msvcp140.dll version: $($best.VersionInfo.FileVersion)"
 
         $targetPath = "build\windows\x64\runner\Release"
 
@@ -129,6 +118,14 @@ jobs:
         Copy-Item "$dllPath\msvcp140_1.dll" $targetPath -Force
         Copy-Item "$dllPath\vcruntime140.dll" $targetPath -Force
         Copy-Item "$dllPath\vcruntime140_1.dll" $targetPath -Force
+
+        # Verify bundled version is 14.3x+ (VC143)
+        $bundledVersion = (Get-Item "$targetPath\msvcp140.dll").VersionInfo.FileVersion
+        Write-Host "Bundled msvcp140.dll version: $bundledVersion"
+        if ($bundledVersion -notmatch '^14\.3') {
+          Write-Error "Bundled CRT version $bundledVersion is not VC143 (14.3x) — wrong toolchain!"
+          exit 1
+        }
 
         Write-Host "Bundled VC++ Runtime DLLs to $targetPath"
         Get-ChildItem $targetPath -Filter "*.dll" | Select-Object Name
