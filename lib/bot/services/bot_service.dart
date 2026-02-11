@@ -6,13 +6,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as path;
 import '../models/bot_message.dart';
 import '../models/music_track.dart';
 import '../models/vision_result.dart';
 import 'music_generation_service.dart';
 import 'vision_service.dart';
 import '../../services/log_service.dart';
+import '../../services/storage_config.dart';
 import '../../services/user_location_service.dart';
 import '../../services/location_service.dart';
 import '../../services/i18n_service.dart';
@@ -814,9 +815,9 @@ ${i18n.t('bot_example_questions')}
 
   /// Load conversation history from file
   Future<void> _loadConversationHistory() async {
+    if (!StorageConfig().isInitialized) return;
     try {
-      final dir = await getApplicationDocumentsDirectory();
-      final file = File('${dir.path}/bot_conversation.json');
+      final file = File(path.join(StorageConfig().baseDir, 'bot_conversation.json'));
 
       if (await file.exists()) {
         final content = await file.readAsString();
@@ -832,9 +833,9 @@ ${i18n.t('bot_example_questions')}
 
   /// Save conversation history to file
   Future<void> _saveConversationHistory() async {
+    if (!StorageConfig().isInitialized) return;
     try {
-      final dir = await getApplicationDocumentsDirectory();
-      final file = File('${dir.path}/bot_conversation.json');
+      final file = File(path.join(StorageConfig().baseDir, 'bot_conversation.json'));
 
       final json = _messages
           .where((m) => !m.isThinking)

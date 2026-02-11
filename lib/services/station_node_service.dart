@@ -7,7 +7,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:isolate';
-import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import '../models/station_node.dart';
 import '../models/station_network.dart';
@@ -715,8 +714,7 @@ class StationNodeService {
 
   /// Get station data directory
   Future<Directory> getStationDirectory() async {
-    final appDir = await getApplicationDocumentsDirectory();
-    return Directory(path.join(appDir.path, 'geogram', 'station'));
+    return Directory(path.join(StorageConfig().baseDir, 'station'));
   }
 
   /// Create station directories

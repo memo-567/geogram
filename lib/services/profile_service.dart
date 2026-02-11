@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import 'package:file_picker/file_picker.dart';
 import '../models/profile.dart';
@@ -742,18 +741,25 @@ class ProfileService {
         return null;
       }
 
-      // Get app data directory
-      final appDir = await getApplicationDocumentsDirectory();
-      final geogramDir = Directory(path.join(appDir.path, 'geogram'));
-      if (!await geogramDir.exists()) {
-        await geogramDir.create(recursive: true);
+      // Store in callsign folder via ProfileStorage (handles encryption)
+      final storage = AppService().profileStorage;
+      if (storage == null) {
+        LogService().log('Profile picture: no active profile storage');
+        return null;
       }
 
-      // Copy file to app directory with consistent name
       final extension = path.extension(sourcePath);
-      final destPath = path.join(geogramDir.path, 'profile_picture$extension');
+      final relativePath = 'profile_picture$extension';
+      await storage.copyFromExternal(sourcePath, relativePath);
 
-      await file.copy(destPath);
+      final destPath = storage.getAbsolutePath(relativePath);
+
+      // For encrypted storage, also extract to filesystem for display
+      if (storage.isEncrypted) {
+        await Directory(path.dirname(destPath)).create(recursive: true);
+        await storage.copyToExternal(relativePath, destPath);
+      }
+
       LogService().log('Profile picture saved to: $destPath');
 
       return destPath;
@@ -773,8 +779,16 @@ class ProfileService {
           final file = File(profile.profileImagePath!);
           if (await file.exists()) {
             await file.delete();
-            LogService().log('Profile picture deleted');
           }
+          // Also delete from encrypted storage archive if applicable
+          final storage = AppService().profileStorage;
+          if (storage != null && storage.isEncrypted) {
+            final relativePath = path.basename(profile.profileImagePath!);
+            if (await storage.exists(relativePath)) {
+              await storage.delete(relativePath);
+            }
+          }
+          LogService().log('Profile picture deleted');
         } catch (e) {
           LogService().log('Error deleting profile picture: $e');
         }

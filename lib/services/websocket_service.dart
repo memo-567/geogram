@@ -9,7 +9,6 @@ import 'package:mime/mime.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import '../services/log_service.dart';
 import '../services/log_api_service.dart';
 import '../services/profile_service.dart';
@@ -1656,8 +1655,8 @@ class WebSocketService {
       if (StorageConfig().isInitialized) {
         base = StorageConfig().logsDir;
       } else {
-        final appDir = await getApplicationDocumentsDirectory();
-        base = p.join(appDir.path, 'geogram', 'logs');
+        // Fallback to system temp — never write to Documents
+        base = p.join(Directory.systemTemp.path, 'geogram', 'logs');
       }
       final dir = Directory(base);
       if (!await dir.exists()) {

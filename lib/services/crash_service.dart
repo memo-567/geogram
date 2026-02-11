@@ -8,7 +8,6 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
-import 'package:path_provider/path_provider.dart';
 import 'storage_config.dart';
 import '../version.dart';
 import 'log_service.dart';
@@ -359,8 +358,8 @@ class CrashService {
       if (StorageConfig().isInitialized) {
         return StorageConfig().logsDir;
       }
-      final appDir = await getApplicationDocumentsDirectory();
-      return path.join(appDir.path, 'geogram', 'logs');
+      // Fallback to system temp (same as _earlyLogsDir) — never write to Documents
+      return path.join(Directory.systemTemp.path, 'geogram', 'logs');
     } catch (_) {
       return null;
     }
