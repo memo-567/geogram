@@ -11,11 +11,28 @@ ESP32 stations serve as **infrastructure nodes** in the Geogram network:
 
 ---
 
+## Status Overview
+
+| Device | Status | WiFi | LoRa | Display | Sensors | SD Card |
+|--------|--------|:----:|:----:|:-------:|:-------:|:-------:|
+| **ESP32-C3 Mini** | **Ready** | yes | -- | -- | -- | -- |
+| Heltec WiFi LoRa 32 V3 | Under development | yes | SX1262 | OLED | -- | -- |
+| Heltec WiFi LoRa 32 V2 | Under development | yes | SX1276 | OLED | -- | -- |
+| Heltec WiFi LoRa 32 V1 | Under development | yes | SX1276 | OLED | -- | -- |
+| ESP32-S3 ePaper 1.54" | Under development | yes | -- | E-Paper | Temp/Humidity, RTC | yes |
+| Generic ESP32 | Under development | yes | -- | -- | -- | -- |
+
+> Only the **ESP32-C3 Mini** is currently usable. All other boards are under active development and not yet ready for end users.
+
+---
+
 ## Supported Devices
 
 ### Heltec WiFi LoRa 32 V3 (ESP32-S3)
 
-The recommended board for LoRa mesh networking.
+> **Status: Under development**
+
+A LoRa mesh networking board.
 
 | Spec | Details |
 |------|---------|
@@ -28,6 +45,8 @@ The recommended board for LoRa mesh networking.
 | LED | PWM dimmable (GPIO 35) |
 
 ### Heltec WiFi LoRa 32 V2 (ESP32)
+
+> **Status: Under development**
 
 Previous generation Heltec board. Same form factor as V3 but with the older SX1276 LoRa chip.
 
@@ -43,7 +62,9 @@ Previous generation Heltec board. Same form factor as V3 but with the older SX12
 
 ### Heltec WiFi LoRa 32 V1 (ESP32)
 
-The original Heltec LoRa board. Fully supported but no longer manufactured.
+> **Status: Under development**
+
+The original Heltec LoRa board. No longer manufactured.
 
 | Spec | Details |
 |------|---------|
@@ -56,6 +77,8 @@ The original Heltec LoRa board. Fully supported but no longer manufactured.
 | LED | PWM dimmable (GPIO 25) |
 
 ### ESP32-S3 ePaper 1.54" (Waveshare)
+
+> **Status: Under development**
 
 A sensor-rich board with an e-paper display, ideal for environmental monitoring stations.
 
@@ -73,6 +96,8 @@ A sensor-rich board with an e-paper display, ideal for environmental monitoring 
 
 ### ESP32-C3 Mini
 
+> **Status: Ready**
+
 A minimal, low-cost board for WiFi-only relay nodes. No display, no LoRa.
 
 | Spec | Details |
@@ -84,6 +109,8 @@ A minimal, low-cost board for WiFi-only relay nodes. No display, no LoRa.
 | LED | RGB (GPIO 8) |
 
 ### Generic ESP32
+
+> **Status: Under development**
 
 A skeleton target for any plain ESP32 dev board. WiFi only, no peripherals.
 
