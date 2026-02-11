@@ -650,6 +650,13 @@ class _DMChatPageState extends State<DMChatPage> {
   Widget build(BuildContext context) {
     final device = _devicesService.getDevice(widget.otherCallsign);
     final isOnline = device?.isOnline ?? false;
+    final nickname = device?.displayName;
+    final hasNickname = nickname != null &&
+        nickname != device?.callsign &&
+        nickname.isNotEmpty;
+    final title = hasNickname
+        ? '$nickname (${widget.otherCallsign})'
+        : widget.otherCallsign;
 
     return Scaffold(
       appBar: AppBar(
@@ -665,7 +672,7 @@ class _DMChatPageState extends State<DMChatPage> {
                 color: isOnline ? Colors.green : Colors.grey,
               ),
             ),
-            Text(widget.otherCallsign),
+            Text(title),
           ],
         ),
         actions: [
@@ -830,11 +837,18 @@ class _DMChatPageState extends State<DMChatPage> {
 
   void _showConversationInfo() {
     final device = _devicesService.getDevice(widget.otherCallsign);
+    final nickname = device?.displayName;
+    final hasNickname = nickname != null &&
+        nickname != device?.callsign &&
+        nickname.isNotEmpty;
+    final infoTitle = hasNickname
+        ? '$nickname (${widget.otherCallsign})'
+        : widget.otherCallsign;
 
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Chat with ${widget.otherCallsign}'),
+        title: Text('Chat with $infoTitle'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
