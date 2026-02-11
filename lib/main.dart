@@ -127,16 +127,20 @@ void main() async {
   if (!kIsWeb) {
     // For Flutter desktop apps, Platform.executableArguments contains Flutter engine args
     // On Linux, we read /proc/self/cmdline to get the actual command-line arguments
+    // On Windows/macOS, we use Platform.executableArguments directly
     List<String> allArgs = [];
-    try {
-      final cmdline = File('/proc/self/cmdline').readAsStringSync();
-      allArgs = cmdline
-          .split('\x00')
-          .where((s) => s.isNotEmpty)
-          .skip(1)
-          .toList();
-    } catch (e) {
-      // Fallback to executableArguments (may be empty for desktop)
+    if (Platform.isLinux) {
+      try {
+        final cmdline = File('/proc/self/cmdline').readAsStringSync();
+        allArgs = cmdline
+            .split('\x00')
+            .where((s) => s.isNotEmpty)
+            .skip(1)
+            .toList();
+      } catch (e) {
+        allArgs = Platform.executableArguments;
+      }
+    } else {
       allArgs = Platform.executableArguments;
     }
 

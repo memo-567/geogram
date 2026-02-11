@@ -217,9 +217,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
     // Resolve relative image path to absolute
     String? resolvedImagePath = imagePath;
-    if (imagePath != null && !imagePath.startsWith('/')) {
-      // Resolve relative to project's tests/images folder
-      resolvedImagePath = '/home/brito/code/geograms/geogram/$imagePath';
+    if (imagePath != null && !path.isAbsolute(imagePath)) {
+      // Resolve relative to current working directory
+      resolvedImagePath = path.join(Directory.current.path, imagePath);
       print('DEBUG ChatBrowserPage: resolved image path to $resolvedImagePath');
     }
 
