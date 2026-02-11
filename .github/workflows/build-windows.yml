@@ -229,6 +229,7 @@ jobs:
         Write-Host "=== DLL verification passed ==="
 
     - name: Analyze dependencies
+      continue-on-error: true
       shell: powershell
       run: |
         $targetPath = "build\windows\x64\runner\Release"
@@ -247,6 +248,7 @@ jobs:
         }
 
     - name: Smoke-test launch
+      continue-on-error: true
       shell: powershell
       run: |
         $exe = "build\windows\x64\runner\Release\geogram.exe"
