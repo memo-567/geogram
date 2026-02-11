@@ -161,15 +161,19 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     _subscribeToDownloadEvents();
     _startRelayStatusChecker();
     _startMessagePolling();
-    _loadNicknameMap();
   }
 
   Future<void> _loadNicknameMap() async {
-    final map = await ContactService().buildNicknameMap();
-    if (mounted) {
-      setState(() {
-        _nicknameMap = map;
-      });
+    try {
+      final map = await ContactService().buildNicknameMap();
+      if (mounted) {
+        setState(() {
+          _nicknameMap = map;
+        });
+      }
+    } catch (e) {
+      // ContactService storage may not be initialized (remote device mode)
+      LogService().log('DEBUG _loadNicknameMap: $e');
     }
   }
 
@@ -512,6 +516,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         });
         // Load station chat rooms from the remote device
         await _loadRelayRooms();
+        await _loadNicknameMap();
         return;
       }
 
@@ -562,6 +567,21 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
       // Load station chat rooms - MUST await to ensure rooms are loaded before UI renders
       await _loadRelayRooms();
+
+      // Initialize ContactService for nickname resolution
+      final contactsAppPath = await GroupSyncService().findCollectionPathByType('contacts');
+      if (contactsAppPath != null) {
+        final contactService = ContactService();
+        if (profileStorage != null) {
+          contactService.setStorage(ScopedProfileStorage.fromAbsolutePath(
+            profileStorage, contactsAppPath));
+        } else {
+          contactService.setStorage(FilesystemProfileStorage(contactsAppPath));
+        }
+        await contactService.initializeApp(contactsAppPath);
+      }
+
+      await _loadNicknameMap();
 
       // Auto-select room after UI is ready
       if (widget.initialRoomId != null && mounted) {
