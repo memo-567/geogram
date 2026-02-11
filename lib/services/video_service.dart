@@ -208,7 +208,7 @@ class VideoService {
       }
 
       // Load feedback counts
-      final feedbackCounts = await FeedbackFolderUtils.getAllFeedbackCounts(videoFolderPath);
+      final feedbackCounts = await FeedbackFolderUtils.getAllFeedbackCounts(videoFolderPath, storage: _storage);
 
       // Get comment count
       final commentsPath = FeedbackFolderUtils.buildCommentsPath(videoFolderPath);
@@ -222,7 +222,7 @@ class VideoService {
       // Get user feedback state
       Map<String, bool> userFeedbackState = {};
       if (userNpub != null) {
-        userFeedbackState = await FeedbackFolderUtils.getUserFeedbackState(videoFolderPath, userNpub);
+        userFeedbackState = await FeedbackFolderUtils.getUserFeedbackState(videoFolderPath, userNpub, storage: _storage);
       }
 
       // Update video with additional info
@@ -752,7 +752,7 @@ $description
       event.calculateId();
       event.signWithNsec(nsec);
 
-      return await FeedbackFolderUtils.recordViewEvent(videoFolderPath, event);
+      return await FeedbackFolderUtils.recordViewEvent(videoFolderPath, event, storage: _storage);
     } catch (e) {
       LogService().log('VideoService: Error recording view: $e');
       return false;
@@ -792,7 +792,7 @@ $description
       event.calculateId();
       event.signWithNsec(nsec);
 
-      return await FeedbackFolderUtils.toggleFeedbackEvent(videoFolderPath, feedbackType, event);
+      return await FeedbackFolderUtils.toggleFeedbackEvent(videoFolderPath, feedbackType, event, storage: _storage);
     } catch (e) {
       LogService().log('VideoService: Error toggling feedback: $e');
       return null;
@@ -823,7 +823,7 @@ $description
 
       if (videoFolderPath == null) return [];
 
-      final comments = await FeedbackCommentUtils.loadComments(videoFolderPath);
+      final comments = await FeedbackCommentUtils.loadComments(videoFolderPath, storage: _storage);
       return comments.map((fc) => BlogComment(
         id: fc.id,
         author: fc.author,
@@ -874,6 +874,7 @@ $description
         content: content,
         npub: npub,
         signature: signature,
+        storage: _storage,
       );
     } catch (e) {
       LogService().log('VideoService: Error adding comment: $e');
@@ -899,13 +900,13 @@ $description
 
       // Check if user can delete (must be admin or comment owner)
       if (!isAdmin(userNpub)) {
-        final comment = await FeedbackCommentUtils.getComment(videoFolderPath, commentId);
+        final comment = await FeedbackCommentUtils.getComment(videoFolderPath, commentId, storage: _storage);
         if (comment == null || comment.npub != userNpub) {
           return false;
         }
       }
 
-      return await FeedbackCommentUtils.deleteComment(videoFolderPath, commentId);
+      return await FeedbackCommentUtils.deleteComment(videoFolderPath, commentId, storage: _storage);
     } catch (e) {
       LogService().log('VideoService: Error deleting comment: $e');
       return false;

@@ -1,6 +1,5 @@
-import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
-
 import 'feedback_folder_utils.dart';
+import '../services/profile_storage.dart';
 
 class FeedbackComment {
   final String id;
@@ -134,17 +133,17 @@ class FeedbackCommentUtils {
   }
 
   /// List comment filenames (sorted) for a content item.
-  static Future<List<String>> listCommentFiles(String contentPath) async {
-    final commentsDir = Directory(FeedbackFolderUtils.buildCommentsPath(contentPath));
-    if (!await commentsDir.exists()) return [];
+  static Future<List<String>> listCommentFiles(
+    String contentPath, {
+    required ProfileStorage storage,
+  }) async {
+    final commentsPath = FeedbackFolderUtils.buildCommentsPath(contentPath);
+    final entries = await storage.listDirectory(commentsPath);
 
     final files = <String>[];
-    await for (final entity in commentsDir.list()) {
-      if (entity is File) {
-        final filename = entity.path.split('/').last;
-        if (isValidCommentFilename(filename)) {
-          files.add(filename);
-        }
+    for (final entry in entries) {
+      if (!entry.isDirectory && isValidCommentFilename(entry.name)) {
+        files.add(entry.name);
       }
     }
 
@@ -153,8 +152,11 @@ class FeedbackCommentUtils {
   }
 
   /// Load comments and return them sorted by timestamp (oldest first).
-  static Future<List<FeedbackComment>> loadComments(String contentPath) async {
-    final commentFiles = await listCommentFiles(contentPath);
+  static Future<List<FeedbackComment>> loadComments(
+    String contentPath, {
+    required ProfileStorage storage,
+  }) async {
+    final commentFiles = await listCommentFiles(contentPath, storage: storage);
     final comments = <FeedbackComment>[];
     final commentsDir = FeedbackFolderUtils.buildCommentsPath(contentPath);
     final seenSignatures = <String>{};
@@ -163,7 +165,8 @@ class FeedbackCommentUtils {
       final commentId = filename.replaceAll('.txt', '');
       final filePath = '$commentsDir/$filename';
       try {
-        final content = await File(filePath).readAsString();
+        final content = await storage.readString(filePath);
+        if (content == null) continue;
         final comment = parseCommentFile(content, commentId);
         final signature = comment.signature;
         if (signature != null && signature.isNotEmpty) {
@@ -187,6 +190,7 @@ class FeedbackCommentUtils {
     required String content,
     String? npub,
     String? signature,
+    required ProfileStorage storage,
   }) async {
     final now = DateTime.now();
     final filename = generateCommentFilename(now, author);
@@ -203,33 +207,35 @@ class FeedbackCommentUtils {
       signature: signature,
     );
 
-    final commentsDir = Directory(FeedbackFolderUtils.buildCommentsPath(contentPath));
-    if (!await commentsDir.exists()) {
-      await commentsDir.create(recursive: true);
-    }
-
-    final commentFile = File('${commentsDir.path}/$filename');
-    await commentFile.writeAsString(commentContent, flush: true);
+    final commentsPath = FeedbackFolderUtils.buildCommentsPath(contentPath);
+    await storage.createDirectory(commentsPath);
+    await storage.writeString('$commentsPath/$filename', commentContent);
 
     return commentId;
   }
 
   /// Count comment files for a content item.
-  static Future<int> getCommentCount(String contentPath) async {
-    final commentFiles = await listCommentFiles(contentPath);
+  static Future<int> getCommentCount(
+    String contentPath, {
+    required ProfileStorage storage,
+  }) async {
+    final commentFiles = await listCommentFiles(contentPath, storage: storage);
     return commentFiles.length;
   }
 
   /// Get a single comment by ID.
-  static Future<FeedbackComment?> getComment(String contentPath, String commentId) async {
+  static Future<FeedbackComment?> getComment(
+    String contentPath,
+    String commentId, {
+    required ProfileStorage storage,
+  }) async {
     final filename = '$commentId.txt';
     final filePath = '${FeedbackFolderUtils.buildCommentsPath(contentPath)}/$filename';
-    final file = File(filePath);
+    final content = await storage.readString(filePath);
 
-    if (!await file.exists()) return null;
+    if (content == null) return null;
 
     try {
-      final content = await file.readAsString();
       return parseCommentFile(content, commentId);
     } catch (e) {
       return null;
@@ -238,15 +244,18 @@ class FeedbackCommentUtils {
 
   /// Delete a comment by ID.
   /// Returns true if deleted, false if not found.
-  static Future<bool> deleteComment(String contentPath, String commentId) async {
+  static Future<bool> deleteComment(
+    String contentPath,
+    String commentId, {
+    required ProfileStorage storage,
+  }) async {
     final filename = '$commentId.txt';
     final filePath = '${FeedbackFolderUtils.buildCommentsPath(contentPath)}/$filename';
-    final file = File(filePath);
 
-    if (!await file.exists()) return false;
+    if (!await storage.exists(filePath)) return false;
 
     try {
-      await file.delete();
+      await storage.delete(filePath);
       return true;
     } catch (e) {
       return false;

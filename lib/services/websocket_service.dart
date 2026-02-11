@@ -22,6 +22,7 @@ import '../services/ble_foreground_service.dart';
 import '../services/station_service.dart';
 import '../services/storage_config.dart';
 import '../services/webrtc_config.dart';
+import '../services/profile_storage.dart';
 import '../util/nostr_event.dart';
 import '../util/tlsh.dart';
 import '../util/event_bus.dart';
@@ -948,9 +949,15 @@ class WebSocketService {
 
       // Search for blog post in all public blog collections
       final apps = await AppService().loadApps();
+      final profileStorage = AppService().profileStorage;
       BlogPost? foundPost;
       String? appName;
       List<String> foundPostLikedHexPubkeys = [];
+
+      if (profileStorage == null) {
+        _sendHttpResponse(requestId, 500, {'Content-Type': 'text/plain'}, 'Storage not available');
+        return;
+      }
 
       for (final app in apps) {
         // Skip private collections and non-blog collections
@@ -960,19 +967,24 @@ class WebSocketService {
         final storagePath = app.storagePath;
         if (storagePath == null) continue;
 
-        // Blog structure: {storagePath}/{year}/{postId}/post.md
-        final blogPath = '$storagePath/$year/$filename/post.md';
-        final blogFile = File(blogPath);
+        // Create scoped storage for this blog app
+        final appStorage = ScopedProfileStorage.fromAbsolutePath(profileStorage, storagePath);
 
-        if (await blogFile.exists()) {
+        // Blog structure: {appFolder}/{year}/{postId}/post.md
+        final postRelativePath = '$year/$filename/post.md';
+        final content = await appStorage.readString(postRelativePath);
+
+        if (content != null) {
           try {
-            final content = await blogFile.readAsString();
             foundPost = BlogPost.fromText(content, filename);
             appName = app.title;
 
             // Load feedback counts
-            final postFolderPath = '$storagePath/$year/$filename';
-            final feedbackCounts = await FeedbackFolderUtils.getAllFeedbackCounts(postFolderPath);
+            final postFolderPath = '$year/$filename';
+            final feedbackCounts = await FeedbackFolderUtils.getAllFeedbackCounts(
+              postFolderPath,
+              storage: appStorage,
+            );
             foundPost = foundPost.copyWith(
               likesCount: feedbackCounts[FeedbackFolderUtils.feedbackTypeLikes] ?? 0,
               dislikesCount: feedbackCounts[FeedbackFolderUtils.feedbackTypeDislikes] ?? 0,
@@ -983,6 +995,7 @@ class WebSocketService {
             final likedNpubs = await FeedbackFolderUtils.readFeedbackFile(
               postFolderPath,
               FeedbackFolderUtils.feedbackTypeLikes,
+              storage: appStorage,
             );
             foundPostLikedHexPubkeys = <String>[];
             for (final npub in likedNpubs) {

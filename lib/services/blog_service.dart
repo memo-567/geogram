@@ -248,7 +248,7 @@ class BlogService {
 
       // Load comments from comments/ directory
       // Note: BlogFolderUtils still uses filesystem paths - needs future migration
-      final comments = await BlogFolderUtils.loadComments(postFolderPath);
+      final comments = await BlogFolderUtils.loadComments(postFolderPath, storage: _storage);
 
       // Return post with comments
       return post.copyWith(comments: comments);
@@ -630,6 +630,7 @@ class BlogService {
         content: content,
         npub: npub,
         signature: event.sig!,
+        storage: _storage,
       );
 
       LogService().log('BlogService: Added signed comment $commentId to post: $postId');
@@ -658,7 +659,7 @@ class BlogService {
     final postFolderPath = '$_appPath/$year/$postId';
 
     // Load the comment to check permissions
-    final comment = await BlogFolderUtils.getComment(postFolderPath, commentId);
+    final comment = await BlogFolderUtils.getComment(postFolderPath, commentId, storage: _storage);
     if (comment == null) {
       LogService().log('BlogService: Comment not found: $commentId');
       return false;
@@ -673,7 +674,7 @@ class BlogService {
     }
 
     try {
-      final deleted = await BlogFolderUtils.deleteComment(postFolderPath, commentId);
+      final deleted = await BlogFolderUtils.deleteComment(postFolderPath, commentId, storage: _storage);
       if (deleted) {
         LogService().log('BlogService: Deleted comment $commentId from post: $postId');
       }
@@ -730,12 +731,12 @@ class BlogService {
 
     try {
       // Get all feedback counts
-      final counts = await FeedbackFolderUtils.getAllFeedbackCounts(postFolderPath);
+      final counts = await FeedbackFolderUtils.getAllFeedbackCounts(postFolderPath, storage: _storage);
 
       // Get user state if npub provided
       Map<String, bool>? userState;
       if (userNpub != null && userNpub.isNotEmpty) {
-        userState = await FeedbackFolderUtils.getUserFeedbackState(postFolderPath, userNpub);
+        userState = await FeedbackFolderUtils.getUserFeedbackState(postFolderPath, userNpub, storage: _storage);
       }
 
       return {
@@ -906,6 +907,7 @@ class BlogService {
         postFolderPath,
         feedbackType,
         event,
+        storage: _storage,
       );
 
       if (isNowActive == null) {
@@ -929,7 +931,7 @@ class BlogService {
     if (postFolderPath == null) return 0;
 
     try {
-      return await FeedbackFolderUtils.getFeedbackCount(postFolderPath, feedbackType);
+      return await FeedbackFolderUtils.getFeedbackCount(postFolderPath, feedbackType, storage: _storage);
     } catch (e) {
       LogService().log('BlogService: Error getting feedback count: $e');
       return 0;
@@ -942,7 +944,7 @@ class BlogService {
     if (postFolderPath == null) return false;
 
     try {
-      return await FeedbackFolderUtils.hasFeedback(postFolderPath, feedbackType, npub);
+      return await FeedbackFolderUtils.hasFeedback(postFolderPath, feedbackType, npub, storage: _storage);
     } catch (e) {
       LogService().log('BlogService: Error checking feedback: $e');
       return false;

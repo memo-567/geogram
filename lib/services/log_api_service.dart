@@ -7324,8 +7324,9 @@ class LogApiService {
       final alert = tuple.$1;
       final alertPath = tuple.$2;
 
-      // Check if alert has photos
-      final hasPhotos = await _alertHasPhotos(alertPath);
+      // Check if alert has photos (alertPath is absolute from _getAllAlertsGlobal)
+      final alertDirStorage = FilesystemProfileStorage(alertPath);
+      final hasPhotos = await _alertHasPhotos('', alertDirStorage);
 
       alertsJson.add(alert.toApiJson(summary: true, hasPhotos: hasPhotos));
     }
@@ -7361,9 +7362,10 @@ class LogApiService {
 
     final alert = result.$1;
     final alertPath = result.$2;
+    final alertStorage = result.$3;
 
     // Get list of photos
-    final photos = await _getAlertPhotos(alertPath);
+    final photos = await _getAlertPhotos(alertPath, alertStorage);
 
     // Build full response with photos list
     final json = alert.toApiJson(summary: false, hasPhotos: photos.isNotEmpty);
@@ -7391,6 +7393,7 @@ class LogApiService {
     }
 
     final alertPath = result.$2;
+    final fileStorage = result.$3;
 
     // Sanitize path to prevent directory traversal
     if (filePath.contains('..')) {
@@ -7400,10 +7403,8 @@ class LogApiService {
       );
     }
 
-    final fullPath = '$alertPath/$filePath';
-    final file = io.File(fullPath);
-
-    if (!await file.exists()) {
+    final relativePath = '$alertPath/$filePath';
+    if (!await fileStorage.exists(relativePath)) {
       return shelf.Response.notFound(
         jsonEncode({'error': 'File not found', 'path': filePath}),
         headers: headers,
@@ -7432,7 +7433,13 @@ class LogApiService {
     }
 
     // Read file bytes
-    final bytes = await file.readAsBytes();
+    final bytes = await fileStorage.readBytes(relativePath);
+    if (bytes == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'File not found', 'path': filePath}),
+        headers: headers,
+      );
+    }
 
     // Return binary content with appropriate headers
     return shelf.Response.ok(
@@ -7610,62 +7617,46 @@ class LogApiService {
   }
 
   /// Find alert by API ID (YYYY-MM-DD_title-slug)
-  /// Scans all alerts and matches by apiId since folder names use different format
-  Future<(Report, String)?> _getAlertByApiId(String apiId, String dataDir) async {
-    final devicesDir = io.Directory('$dataDir/devices');
-    if (!await devicesDir.exists()) return null;
+  /// Scans alerts directory and matches by apiId since folder names use different format.
+  /// Returns (Report, relativePath, ProfileStorage) where relativePath is relative to storage root.
+  Future<(Report, String, ProfileStorage)?> _getAlertByApiId(String apiId, String dataDir) async {
+    final profile = ProfileService().getProfile();
+    final storage = FilesystemProfileStorage('$dataDir/devices/${profile.callsign}');
+    if (!await storage.directoryExists('alerts')) return null;
 
-    await for (final deviceEntity in devicesDir.list()) {
-      if (deviceEntity is! io.Directory) continue;
+    final entries = await storage.listDirectory('alerts', recursive: true);
+    for (final entry in entries) {
+      if (entry.isDirectory || entry.name != 'report.txt') continue;
 
-      final alertsDir = io.Directory('${deviceEntity.path}/alerts');
-      if (!await alertsDir.exists()) continue;
+      try {
+        final content = await storage.readString(entry.path);
+        if (content == null) continue;
+        final alertDirPath = entry.path.replaceFirst('/report.txt', '').replaceFirst('\\report.txt', '');
+        final folderName = alertDirPath.split('/').last.split('\\').last;
+        final alert = Report.fromText(content, folderName);
 
-      // Search recursively through alerts directory (handles both flat and nested structures)
-      final result = await _searchAlertsRecursively(alertsDir, apiId);
-      if (result != null) return result;
-    }
-    return null;
-  }
-
-  /// Helper to recursively search for an alert by apiId
-  Future<(Report, String)?> _searchAlertsRecursively(io.Directory dir, String apiId) async {
-    await for (final entity in dir.list()) {
-      if (entity is! io.Directory) continue;
-
-      // Check if this directory contains a report.txt
-      final alertFile = io.File('${entity.path}/report.txt');
-      if (await alertFile.exists()) {
-        try {
-          final content = await alertFile.readAsString();
-          final alert = Report.fromText(content, entity.path.split('/').last);
-
-          // Check if this alert's apiId matches
-          if (alert.apiId == apiId) {
-            return (alert, entity.path);
-          }
-        } catch (e) {
-          // Skip malformed alerts
+        if (alert.apiId == apiId) {
+          return (alert, alertDirPath, storage);
         }
-      } else {
-        // No report.txt, recurse into subdirectory (e.g., active/, region folders)
-        final result = await _searchAlertsRecursively(entity, apiId);
-        if (result != null) return result;
+      } catch (e) {
+        // Skip malformed alerts
       }
     }
     return null;
   }
 
   /// Check if an alert has photos (checks both root and images/ subfolder)
-  Future<bool> _alertHasPhotos(String alertPath) async {
+  /// [alertPath] is relative to [storage] root.
+  Future<bool> _alertHasPhotos(String alertPath, ProfileStorage storage) async {
     final photoExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
 
     // Check images/ subfolder first (new structure)
-    final imagesDir = io.Directory('$alertPath/images');
-    if (await imagesDir.exists()) {
-      await for (final entity in imagesDir.list()) {
-        if (entity is io.File) {
-          final ext = path.extension(entity.path).toLowerCase();
+    final imagesPath = alertPath.isEmpty ? 'images' : '$alertPath/images';
+    if (await storage.directoryExists(imagesPath)) {
+      final imageEntries = await storage.listDirectory(imagesPath);
+      for (final entry in imageEntries) {
+        if (!entry.isDirectory) {
+          final ext = path.extension(entry.name).toLowerCase();
           if (photoExtensions.contains(ext)) {
             return true;
           }
@@ -7674,12 +7665,12 @@ class LogApiService {
     }
 
     // Also check root folder for backwards compatibility
-    final dir = io.Directory(alertPath);
-    if (!await dir.exists()) return false;
+    if (!await storage.directoryExists(alertPath.isEmpty ? '.' : alertPath)) return false;
 
-    await for (final entity in dir.list()) {
-      if (entity is io.File) {
-        final ext = path.extension(entity.path).toLowerCase();
+    final rootEntries = await storage.listDirectory(alertPath.isEmpty ? '.' : alertPath);
+    for (final entry in rootEntries) {
+      if (!entry.isDirectory) {
+        final ext = path.extension(entry.name).toLowerCase();
         if (photoExtensions.contains(ext)) {
           return true;
         }
@@ -7689,32 +7680,35 @@ class LogApiService {
   }
 
   /// Get list of photo filenames in an alert directory (checks both root and images/ subfolder)
-  /// Returns filenames prefixed with 'images/' for photos in the images subfolder
-  Future<List<String>> _getAlertPhotos(String alertPath) async {
+  /// Returns filenames prefixed with 'images/' for photos in the images subfolder.
+  /// [alertPath] is relative to [storage] root.
+  Future<List<String>> _getAlertPhotos(String alertPath, ProfileStorage storage) async {
     final photos = <String>[];
     final photoExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
 
     // Check images/ subfolder first (new structure)
-    final imagesDir = io.Directory('$alertPath/images');
-    if (await imagesDir.exists()) {
-      await for (final entity in imagesDir.list()) {
-        if (entity is io.File) {
-          final ext = path.extension(entity.path).toLowerCase();
+    final imagesPath = alertPath.isEmpty ? 'images' : '$alertPath/images';
+    if (await storage.directoryExists(imagesPath)) {
+      final imageEntries = await storage.listDirectory(imagesPath);
+      for (final entry in imageEntries) {
+        if (!entry.isDirectory) {
+          final ext = path.extension(entry.name).toLowerCase();
           if (photoExtensions.contains(ext)) {
-            photos.add('images/${path.basename(entity.path)}');
+            photos.add('images/${entry.name}');
           }
         }
       }
     }
 
     // Also check root folder for backwards compatibility
-    final dir = io.Directory(alertPath);
-    if (await dir.exists()) {
-      await for (final entity in dir.list()) {
-        if (entity is io.File) {
-          final ext = path.extension(entity.path).toLowerCase();
+    final rootPath = alertPath.isEmpty ? '.' : alertPath;
+    if (await storage.directoryExists(rootPath)) {
+      final rootEntries = await storage.listDirectory(rootPath);
+      for (final entry in rootEntries) {
+        if (!entry.isDirectory) {
+          final ext = path.extension(entry.name).toLowerCase();
           if (photoExtensions.contains(ext)) {
-            photos.add(path.basename(entity.path));
+            photos.add(entry.name);
           }
         }
       }
@@ -9184,27 +9178,54 @@ class LogApiService {
 
       final callsign = params['callsign'] as String? ?? defaultCallsign;
       String? placePath;
+      ProfileStorage? placeStorage;
       if (placePathParam != null && placePathParam.isNotEmpty) {
-        final placeFile = io.File(placePathParam);
-        if (await placeFile.exists()) {
-          placePath = placeFile.parent.path;
-        } else {
-          final placeDir = io.Directory(placePathParam);
-          if (await placeDir.exists()) {
-            placePath = placeDir.path;
-          } else {
-            return shelf.Response.badRequest(
-              body: jsonEncode({
-                'success': false,
-                'error': 'place_path not found',
-                'place_path': placePathParam,
-              }),
-              headers: headers,
-            );
+        // Convert absolute place_path to relative path + storage
+        // placePathParam may be a file (place.txt) or directory
+        // The device dir is: $dataDir/devices/$callsign
+        final cs = callsign ?? defaultCallsign ?? '';
+        final deviceBase = '$dataDir/devices/$cs';
+        final storage = FilesystemProfileStorage(deviceBase);
+        final normalizedParam = path.normalize(placePathParam);
+        final normalizedBase = path.normalize(deviceBase);
+
+        String absPath = normalizedParam;
+        // If it's a file path (e.g., place.txt), use parent directory
+        if (normalizedParam.endsWith('place.txt') || normalizedParam.endsWith('.txt')) {
+          absPath = path.dirname(normalizedParam);
+        }
+
+        // Convert absolute path to relative
+        if (absPath.startsWith(normalizedBase)) {
+          var relPath = absPath.substring(normalizedBase.length);
+          while (relPath.startsWith('/') || relPath.startsWith('\\')) {
+            relPath = relPath.substring(1);
+          }
+          while (relPath.endsWith('/') || relPath.endsWith('\\')) {
+            relPath = relPath.substring(0, relPath.length - 1);
+          }
+          if (await storage.directoryExists(relPath)) {
+            placePath = relPath;
+            placeStorage = storage;
           }
         }
+
+        if (placePath == null) {
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'place_path not found',
+              'place_path': placePathParam,
+            }),
+            headers: headers,
+          );
+        }
       } else {
-        placePath = await _resolvePlacePath(dataDir, placeId, callsign: callsign);
+        final resolved = await _resolvePlacePath(dataDir, placeId, callsign: callsign);
+        if (resolved != null) {
+          placePath = resolved.$1;
+          placeStorage = resolved.$2;
+        }
       }
 
       switch (action) {
@@ -9244,24 +9265,27 @@ class LogApiService {
 
           bool? localSaved;
           int? localCount;
-          if (placePath != null && placePath.isNotEmpty) {
+          if (placePath != null && placePath.isNotEmpty && placeStorage != null) {
             if (liked) {
               await FeedbackFolderUtils.addFeedbackEvent(
                 placePath,
                 FeedbackFolderUtils.feedbackTypeLikes,
                 event,
+                storage: placeStorage,
               );
             } else {
               await FeedbackFolderUtils.removeFeedbackEvent(
                 placePath,
                 FeedbackFolderUtils.feedbackTypeLikes,
                 event.npub,
+                storage: placeStorage,
               );
             }
 
             final localNpubs = await FeedbackFolderUtils.readFeedbackFile(
               placePath,
               FeedbackFolderUtils.feedbackTypeLikes,
+              storage: placeStorage,
             );
             localSaved = liked ? localNpubs.contains(event.npub) : !localNpubs.contains(event.npub);
             localCount = localNpubs.length;
@@ -9340,13 +9364,14 @@ class LogApiService {
 
           String? commentId;
           bool? localSaved;
-          if (placePath != null && placePath.isNotEmpty) {
+          if (placePath != null && placePath.isNotEmpty && placeStorage != null) {
             commentId = await FeedbackCommentUtils.writeComment(
               contentPath: placePath,
               author: author,
               content: content,
               npub: npub,
               signature: signature,
+              storage: placeStorage,
             );
             localSaved = commentId.isNotEmpty;
           }
@@ -9385,25 +9410,30 @@ class LogApiService {
     }
   }
 
-  Future<String?> _resolvePlacePath(
+  Future<(String, ProfileStorage)?> _resolvePlacePath(
     String dataDir,
     String folderName, {
     String? callsign,
   }) async {
-    final devicesDir = io.Directory('$dataDir/devices');
-    if (!await devicesDir.exists()) return null;
+    Future<(String, ProfileStorage)?> searchCallsign(String cs) async {
+      final storage = FilesystemProfileStorage('$dataDir/devices/$cs');
+      if (!await storage.directoryExists('places')) return null;
 
-    Future<String?> searchCallsign(String callsign) async {
-      final placesRoot = io.Directory('$dataDir/devices/$callsign/places');
-      if (!await placesRoot.exists()) return null;
+      final entries = await storage.listDirectory('places', recursive: true);
+      for (final entry in entries) {
+        if (entry.isDirectory) continue;
+        if (!entry.name.endsWith('place.txt')) continue;
 
-      await for (final entity in placesRoot.list(recursive: true)) {
-        if (entity is! io.File) continue;
-        if (!entity.path.endsWith('/place.txt')) continue;
-
-        final folder = entity.parent;
-        if (path.basename(folder.path) == folderName) {
-          return folder.path;
+        // entry.path is like "places/region/folder-name/place.txt"
+        // We want the parent directory path: "places/region/folder-name"
+        final parentPath = entry.path.contains('/')
+            ? entry.path.substring(0, entry.path.lastIndexOf('/'))
+            : entry.path.contains('\\')
+                ? entry.path.substring(0, entry.path.lastIndexOf('\\'))
+                : '';
+        final parentName = parentPath.split('/').last.split('\\').last;
+        if (parentName == folderName) {
+          return (parentPath, storage);
         }
       }
       return null;
@@ -9412,6 +9442,9 @@ class LogApiService {
     if (callsign != null && callsign.isNotEmpty) {
       return searchCallsign(callsign);
     }
+
+    final devicesDir = io.Directory('$dataDir/devices');
+    if (!await devicesDir.exists()) return null;
 
     await for (final deviceEntity in devicesDir.list()) {
       if (deviceEntity is! io.Directory) continue;
@@ -9621,7 +9654,9 @@ class LogApiService {
           for (final tuple in alertsWithPaths) {
             final alert = tuple.$1;
             final alertPath = tuple.$2;
-            final hasPhotos = await _alertHasPhotos(alertPath);
+            // alertPath is absolute from _getAllAlertsGlobal
+            final alertDirStorage = FilesystemProfileStorage(alertPath);
+            final hasPhotos = await _alertHasPhotos('', alertDirStorage);
             alertsJson.add(alert.toApiJson(summary: true, hasPhotos: hasPhotos));
           }
 
@@ -9661,10 +9696,10 @@ class LogApiService {
           }
 
           final alertPath = result.$2;
-          final alertDir = io.Directory(alertPath);
+          final deleteStorage = result.$3;
 
-          if (await alertDir.exists()) {
-            await alertDir.delete(recursive: true);
+          if (await deleteStorage.directoryExists(alertPath)) {
+            await deleteStorage.deleteDirectory(alertPath, recursive: true);
             LogService().log('LogApiService: Deleted alert: $alertId');
 
             return shelf.Response.ok(
@@ -9714,6 +9749,7 @@ class LogApiService {
 
           final alertToPoint = pointResult.$1;
           final alertPathForPoint = pointResult.$2;
+          final pointStorage = pointResult.$3;
 
           // Get npub from params or use profile
           String? npub = params['npub'] as String?;
@@ -9736,7 +9772,7 @@ class LogApiService {
             );
           }
 
-          final pointedBy = await AlertFolderUtils.readPointsFile(alertPathForPoint);
+          final pointedBy = await AlertFolderUtils.readPointsFile(alertPathForPoint, storage: pointStorage);
           final wasPointed = pointedBy.contains(npub);
           final event = await AlertFeedbackService().buildReactionEvent(
             alertToPoint.apiId,
@@ -9758,6 +9794,7 @@ class LogApiService {
             alertPathForPoint,
             FeedbackFolderUtils.feedbackTypePoints,
             event,
+            storage: pointStorage,
           );
           if (isNowActive == null) {
             return shelf.Response.internalServerError(
@@ -9770,9 +9807,10 @@ class LogApiService {
           }
 
           // Update lastModified on report.txt
-          final reportFileForPoint = io.File('$alertPathForPoint/report.txt');
-          if (await reportFileForPoint.exists()) {
-            var content = await reportFileForPoint.readAsString();
+          final reportPathForPoint = '$alertPathForPoint/report.txt';
+          final existingReportForPoint = await pointStorage.readString(reportPathForPoint);
+          if (existingReportForPoint != null) {
+            var content = existingReportForPoint;
             final now = DateTime.now().toUtc().toIso8601String();
             // Update LAST_MODIFIED if exists, or add it
             if (content.contains('LAST_MODIFIED: ')) {
@@ -9800,10 +9838,10 @@ class LogApiService {
               lines.insert(insertIdx, 'LAST_MODIFIED: $now');
               content = lines.join('\n');
             }
-            await reportFileForPoint.writeAsString(content);
+            await pointStorage.writeString(reportPathForPoint, content);
           }
 
-          final updatedPointedBy = await AlertFolderUtils.readPointsFile(alertPathForPoint);
+          final updatedPointedBy = await AlertFolderUtils.readPointsFile(alertPathForPoint, storage: pointStorage);
           LogService().log('LogApiService: ${isNowActive ? "Pointed" : "Unpointed"} alert: $alertId by $npub');
 
           // Sync to station (best-effort, fire-and-forget)
@@ -9853,6 +9891,7 @@ class LogApiService {
 
           final alertToVerify = verifyResult.$1;
           final alertPathForVerify = verifyResult.$2;
+          final verifyStorage = verifyResult.$3;
 
           // Get npub from params or use profile
           String? verifyNpub = params['npub'] as String?;
@@ -9890,6 +9929,7 @@ class LogApiService {
             alertPathForVerify,
             FeedbackFolderUtils.feedbackTypeVerifications,
             event,
+            storage: verifyStorage,
           );
 
           final verifiedBy = List<String>.from(alertToVerify.verifiedBy);
@@ -9903,8 +9943,7 @@ class LogApiService {
             lastModified: added ? DateTime.now().toUtc().toIso8601String() : null,
           );
 
-          final reportFileForVerify = io.File('$alertPathForVerify/report.txt');
-          await reportFileForVerify.writeAsString(updatedVerifyAlert.exportAsText());
+          await verifyStorage.writeString('$alertPathForVerify/report.txt', updatedVerifyAlert.exportAsText());
 
           LogService().log('LogApiService: ${added ? "Verified" : "Already verified"} alert: $verifyAlertId by $verifyNpub');
 
@@ -9965,6 +10004,7 @@ class LogApiService {
           }
 
           final alertPathForComment = commentResult.$2;
+          final commentStorage = commentResult.$3;
 
           // Get author from params or profile
           String author = params['author'] as String? ?? '';
@@ -9987,23 +10027,27 @@ class LogApiService {
             content: content,
             npub: commentNpub,
             signature: signature,
+            storage: commentStorage,
           );
 
           final commentFilePath = '${FeedbackFolderUtils.buildCommentsPath(alertPathForComment)}/$commentId.txt';
           String createdStr = '';
           try {
-            final commentContent = await io.File(commentFilePath).readAsString();
-            final parsed = FeedbackCommentUtils.parseCommentFile(commentContent, commentId);
-            createdStr = parsed.created;
+            final commentContent = await commentStorage.readString(commentFilePath);
+            if (commentContent != null) {
+              final parsed = FeedbackCommentUtils.parseCommentFile(commentContent, commentId);
+              createdStr = parsed.created;
+            }
           } catch (_) {
             final now = DateTime.now();
             createdStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
                 '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
           }
 
-          final reportFileForComment = io.File('$alertPathForComment/report.txt');
-          if (await reportFileForComment.exists()) {
-            var reportContent = await reportFileForComment.readAsString();
+          final reportPathForComment = '$alertPathForComment/report.txt';
+          final existingReportForComment = await commentStorage.readString(reportPathForComment);
+          if (existingReportForComment != null) {
+            var reportContent = existingReportForComment;
             final now = DateTime.now().toUtc().toIso8601String();
             if (reportContent.contains('LAST_MODIFIED: ')) {
               reportContent = reportContent.replaceFirst(
@@ -10026,7 +10070,7 @@ class LogApiService {
               lines.insert(insertIdx, 'LAST_MODIFIED: $now');
               reportContent = lines.join('\n');
             }
-            await reportFileForComment.writeAsString(reportContent);
+            await commentStorage.writeString(reportPathForComment, reportContent);
           }
 
           LogService().log('LogApiService: Added comment to alert: $alertIdForComment by $author');
@@ -10241,9 +10285,11 @@ class LogApiService {
           }
 
           final alertToShare = shareResult.$1;
-          final alertPath = shareResult.$2;
+          final alertPathForShare = shareResult.$2;
+          // ignore: unused_local_variable
+          final shareStorage = shareResult.$3;
 
-          LogService().log('LogApiService: Sharing alert ${alertToShare.apiId} from $alertPath');
+          LogService().log('LogApiService: Sharing alert ${alertToShare.apiId} from $alertPathForShare');
 
           // Share to station
           try {
@@ -10321,7 +10367,10 @@ class LogApiService {
           }
 
           final uploadAlert = uploadResult.$1;
+          // ignore: unused_local_variable
           final uploadAlertPath = uploadResult.$2;
+          // ignore: unused_local_variable
+          final uploadStorage = uploadResult.$3;
 
           LogService().log('LogApiService: Uploading photos for alert ${uploadAlert.apiId} to $stationUrl');
 
@@ -10579,9 +10628,9 @@ class LogApiService {
         LogService().log('Blog API: Serving blog for device $deviceCallsign (from proxy header)');
       }
 
+      final blogHandlerStorage = FilesystemProfileStorage('$dataDir/devices/$callsign');
       final blogApi = BlogHandler(
-        dataDir: dataDir,
-        callsign: callsign,
+        storage: blogHandlerStorage,
         log: (level, message) => LogService().log('BlogHandler [$level]: $message'),
       );
 
@@ -11197,9 +11246,11 @@ class LogApiService {
         LogService().log('Video API: Serving videos for device $deviceCallsign (from proxy header)');
       }
 
+      final videoStorage = FilesystemProfileStorage('$dataDir/devices/$callsign');
       final videoApi = VideoHandler(
         dataDir: dataDir,
         callsign: callsign,
+        storage: videoStorage,
         log: (level, message) => LogService().log('VideoHandler [$level]: $message'),
       );
 
@@ -11683,20 +11734,20 @@ class LogApiService {
         LogService().log('Blog HTML: Serving blog for device $deviceCallsign (from proxy header)');
       }
 
-      // Initialize blog service
-      final blogService = BlogService();
-      final appPath = '$dataDir/devices/$callsign/blog';
-      await blogService.initializeApp(appPath);
+      // Read blog post directly from storage (no BlogService needed)
+      final blogStorage = FilesystemProfileStorage('$dataDir/devices/$callsign');
+      final year = filename.length >= 4 ? filename.substring(0, 4) : '';
+      final postRelativePath = 'blog/$year/$filename';
+      final postContent = await blogStorage.readString('$postRelativePath/post.md');
 
-      // Load the blog post with feedback counts
-      final post = await blogService.loadFullPostWithFeedback(filename);
-
-      if (post == null) {
+      if (postContent == null) {
         return shelf.Response.notFound(
           '<html><body><h1>404 Not Found</h1><p>Blog post not found: $filename</p></body></html>',
           headers: {'Content-Type': 'text/html'},
         );
       }
+
+      final post = BlogPost.fromText(postContent, filename);
 
       // Only serve published posts
       if (!post.isPublished) {
@@ -11707,11 +11758,10 @@ class LogApiService {
       }
 
       // Read liked npubs and convert to hex pubkeys for client-side checking
-      final year = filename.substring(0, 4);
-      final postPath = '$appPath/$year/$filename';
       final likedNpubs = await FeedbackFolderUtils.readFeedbackFile(
-        postPath,
+        postRelativePath,
         FeedbackFolderUtils.feedbackTypeLikes,
+        storage: blogStorage,
       );
       final likedHexPubkeys = <String>[];
       for (final npub in likedNpubs) {

@@ -61,6 +61,8 @@ void progress(FlashProgress p) {
       );
     case FlashStatus.verifying:
       print('  [${(p.progress * 100).toInt().toString().padLeft(3)}%] Verifying...');
+    case FlashStatus.reading:
+      print('  [${(p.progress * 100).toInt().toString().padLeft(3)}%] Reading flash...');
     case FlashStatus.resetting:
       print('  [....] Resetting device...');
     case FlashStatus.completed:

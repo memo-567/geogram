@@ -455,7 +455,7 @@ class StationServerService {
     if (_alertApi == null) {
       final profile = ProfileService().getProfile();
       _alertApi = AlertHandler(
-        dataDir: StorageConfig().baseDir,
+        storage: FilesystemProfileStorage('${StorageConfig().baseDir}/devices/${profile.callsign}'),
         stationInfo: StationInfo(
           name: _settings.description ?? 'Geogram Station',
           callsign: profile.callsign,
@@ -487,8 +487,9 @@ class StationServerService {
   /// Get the shared feedback API handlers (lazy initialization)
   FeedbackHandler get feedbackApi {
     if (_feedbackApi == null) {
+      final feedbackProfile = ProfileService().getProfile();
       _feedbackApi = FeedbackHandler(
-        dataDir: StorageConfig().baseDir,
+        storage: FilesystemProfileStorage('${StorageConfig().baseDir}/devices/${feedbackProfile.callsign}'),
         log: (level, message) => LogService().log('FeedbackHandler: [$level] $message'),
       );
     }
@@ -4475,7 +4476,8 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
       final storageConfig = StorageConfig();
       final devicesDir = storageConfig.devicesDir;
       final alertsRoot = '$devicesDir/$callsign/alerts';
-      final alertPath = await AlertFolderUtils.findAlertPath(alertsRoot, folderName);
+      final alertFindStorage = FilesystemProfileStorage('$devicesDir/$callsign');
+      final alertPath = await AlertFolderUtils.findAlertPath(alertsRoot, folderName, storage: alertFindStorage);
       if (alertPath == null) {
         request.response.statusCode = 404;
         request.response.headers.contentType = ContentType.json;
@@ -6359,7 +6361,8 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
 
       // Load feedback counts
       final blogPath = '$devicesDir/$callsign/$appFolderName/$year/$filename';
-      final feedbackCounts = await FeedbackFolderUtils.getAllFeedbackCounts(blogPath);
+      final blogFeedbackStorage = FilesystemProfileStorage('$devicesDir/$callsign');
+      final feedbackCounts = await FeedbackFolderUtils.getAllFeedbackCounts(blogPath, storage: blogFeedbackStorage);
       foundPost = foundPost.copyWith(
         likesCount: feedbackCounts[FeedbackFolderUtils.feedbackTypeLikes] ?? 0,
         dislikesCount: feedbackCounts[FeedbackFolderUtils.feedbackTypeDislikes] ?? 0,
@@ -6370,6 +6373,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
       final likedNpubs = await FeedbackFolderUtils.readFeedbackFile(
         blogPath,
         FeedbackFolderUtils.feedbackTypeLikes,
+        storage: blogFeedbackStorage,
       );
       final likedHexPubkeys = <String>[];
       for (final npub in likedNpubs) {

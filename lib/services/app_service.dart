@@ -93,7 +93,6 @@ class AppService {
         callsign: _currentCallsign!,
         nsec: nsec,
         basePath: _appsDir!.path,
-        encryptedService: _encryptedStorageService,
       );
     }
   }
@@ -179,7 +178,6 @@ class AppService {
           callsign: sanitizedCallsign,
           nsec: _currentNsec!,
           basePath: _appsDir!.path,
-          encryptedService: _encryptedStorageService,
         );
       }
     } else {

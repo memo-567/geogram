@@ -18,9 +18,10 @@ import '../models/report.dart';
 import '../services/event_service.dart';
 import '../services/profile_storage.dart';
 import '../util/app_constants.dart';
-import '../services/station_alert_api.dart';
-import '../services/station_place_api.dart';
-import '../services/station_feedback_api.dart';
+import '../api/handlers/alert_handler.dart';
+import '../api/handlers/place_handler.dart';
+import '../api/handlers/feedback_handler.dart';
+import '../api/common/station_info.dart';
 import '../services/nip05_registry_service.dart';
 import '../services/email_relay_service.dart';
 import '../services/smtp_server.dart';
@@ -758,10 +759,10 @@ class PureStationServer {
   static const int _heartbeatIntervalSeconds = 30;  // Send PING every 30s
   static const int _staleClientTimeoutSeconds = 120; // Remove client if no activity for 120s
 
-  // Shared alert API handlers
-  StationAlertApi? _alertApi;
-  StationPlaceApi? _placeApi;
-  StationFeedbackApi? _feedbackApi;
+  // Shared API handlers
+  AlertHandler? _alertApi;
+  PlaceHandler? _placeApi;
+  FeedbackHandler? _feedbackApi;
 
   // NOSTR relay + Blossom
   NostrRelayStorage? _nostrStorage;
@@ -802,13 +803,13 @@ class PureStationServer {
 
   /// Get the shared alert API handlers (lazy initialization)
   /// Must only be called after init() has been called (when _dataDir is set)
-  StationAlertApi get alertApi {
+  AlertHandler get alertApi {
     if (_alertApi == null) {
       if (_dataDir == null) {
         throw StateError('alertApi accessed before init() - _dataDir is null');
       }
-      _alertApi = StationAlertApi(
-        dataDir: _dataDir!,
+      _alertApi = AlertHandler(
+        storage: FilesystemProfileStorage('$_dataDir/devices/${_settings.callsign}'),
         stationInfo: StationInfo(
           name: _settings.name ?? 'Geogram Station',
           callsign: _settings.callsign,
@@ -821,16 +822,18 @@ class PureStationServer {
   }
 
   /// Get the shared places API handlers (lazy initialization)
-  StationPlaceApi get placeApi {
+  PlaceHandler get placeApi {
     if (_placeApi == null) {
       if (_dataDir == null) {
         throw StateError('placeApi accessed before init() - _dataDir is null');
       }
-      _placeApi = StationPlaceApi(
+      _placeApi = PlaceHandler(
         dataDir: _dataDir!,
-        stationName: _settings.name ?? 'Geogram Station',
-        stationCallsign: _settings.callsign,
-        stationNpub: _settings.npub,
+        stationInfo: StationInfo(
+          name: _settings.name ?? 'Geogram Station',
+          callsign: _settings.callsign,
+          npub: _settings.npub,
+        ),
         log: (level, message) => _log(level, message),
       );
     }
@@ -838,13 +841,13 @@ class PureStationServer {
   }
 
   /// Get the shared feedback API handlers (lazy initialization)
-  StationFeedbackApi get feedbackApi {
+  FeedbackHandler get feedbackApi {
     if (_feedbackApi == null) {
       if (_dataDir == null) {
         throw StateError('feedbackApi accessed before init() - _dataDir is null');
       }
-      _feedbackApi = StationFeedbackApi(
-        dataDir: _dataDir!,
+      _feedbackApi = FeedbackHandler(
+        storage: FilesystemProfileStorage('$_dataDir/devices/${_settings.callsign}'),
         log: (level, message) => _log(level, message),
       );
     }
@@ -3669,7 +3672,8 @@ class PureStationServer {
   /// Find alert path by folder name (searches recursively for backwards compatibility)
   Future<String?> _findAlertPath(String callsign, String folderName) async {
     final devicesDir = PureStorageConfig().devicesDir;
-    return AlertFolderUtils.findAlertPath('$devicesDir/$callsign/alerts', folderName);
+    final findStorage = FilesystemProfileStorage('$devicesDir/$callsign');
+    return AlertFolderUtils.findAlertPath('$devicesDir/$callsign/alerts', folderName, storage: findStorage);
   }
 
   /// Fetch photos from the connected client for an alert

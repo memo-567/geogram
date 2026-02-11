@@ -15,6 +15,7 @@ import 'dart:io';
 
 import '../../lib/flasher/serial/serial_port.dart';
 import '../../lib/flasher/services/flasher_storage_service.dart';
+import '../../lib/services/profile_storage.dart';
 
 int _passed = 0;
 int _failed = 0;
@@ -147,7 +148,7 @@ Future<void> main() async {
     if (!await Directory(flasherPath).exists()) {
       fail('Device definitions', 'flasher/ directory not found at $flasherPath');
     } else {
-      storage = FlasherStorageService(flasherPath);
+      storage = FlasherStorageService(flasherPath, FilesystemProfileStorage(flasherPath));
 
       // Load metadata
       final metadata = await storage.loadMetadata();

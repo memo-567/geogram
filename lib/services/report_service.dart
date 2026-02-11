@@ -147,8 +147,8 @@ class ReportService {
               if (!_storage.isEncrypted) {
                 final absolutePath = await _storage.getAbsolutePath(entry.path);
                 if (absolutePath != null) {
-                  final pointedBy = await AlertFolderUtils.readPointsFile(absolutePath);
-                  final verifiedByFeedback = await AlertFolderUtils.readVerificationsFile(absolutePath);
+                  final pointedBy = await AlertFolderUtils.readPointsFile(absolutePath, storage: _storage);
+                  final verifiedByFeedback = await AlertFolderUtils.readVerificationsFile(absolutePath, storage: _storage);
                   final mergedVerifiedBy = {
                     ...report.verifiedBy,
                     ...verifiedByFeedback,
@@ -228,8 +228,8 @@ class ReportService {
               if (!_storage.isEncrypted) {
                 final absolutePath = await _storage.getAbsolutePath(entry.path);
                 if (absolutePath != null) {
-                  final pointedBy = await AlertFolderUtils.readPointsFile(absolutePath);
-                  final verifiedByFeedback = await AlertFolderUtils.readVerificationsFile(absolutePath);
+                  final pointedBy = await AlertFolderUtils.readPointsFile(absolutePath, storage: _storage);
+                  final verifiedByFeedback = await AlertFolderUtils.readVerificationsFile(absolutePath, storage: _storage);
                   final mergedVerifiedBy = {
                     ...report.verifiedBy,
                     ...verifiedByFeedback,
@@ -564,6 +564,7 @@ class ReportService {
       alertPath,
       FeedbackFolderUtils.feedbackTypeVerifications,
       event,
+      storage: _storage,
     );
 
     if (added) {
@@ -627,6 +628,7 @@ class ReportService {
       alertPath,
       FeedbackFolderUtils.feedbackTypePoints,
       event,
+      storage: _storage,
     );
 
     if (added) {
@@ -680,6 +682,7 @@ class ReportService {
       alertPath,
       FeedbackFolderUtils.feedbackTypePoints,
       npub,
+      storage: _storage,
     );
 
     if (removed) {
@@ -732,7 +735,7 @@ class ReportService {
       // For filesystem storage, use feedback comment utils
       final alertPath = await _storage.getAbsolutePath(alertRelativePath);
       if (alertPath != null) {
-        final feedbackComments = await FeedbackCommentUtils.loadComments(alertPath);
+        final feedbackComments = await FeedbackCommentUtils.loadComments(alertPath, storage: _storage);
         comments.addAll(feedbackComments.map((comment) {
           return ReportComment(
             id: comment.id,
@@ -810,6 +813,7 @@ class ReportService {
         content: commentContent,
         npub: resolvedNpub,
         signature: signature,
+        storage: _storage,
       );
 
       final commentFilePath = '${FeedbackFolderUtils.buildCommentsPath(alertPath)}/$commentId.txt';

@@ -7,9 +7,10 @@
  * used by both PureStationServer (CLI) and StationServerService (GUI).
  */
 
-import 'dart:io';
+import 'dart:typed_data';
 
 import '../../models/report.dart';
+import '../../services/profile_storage.dart';
 import '../../util/alert_folder_utils.dart';
 import '../../util/feedback_comment_utils.dart';
 import '../common/file_tree_builder.dart';
@@ -20,12 +21,12 @@ export '../common/station_info.dart' show StationInfo;
 
 /// Shared Alert API handlers for station servers
 class AlertHandler {
-  final String dataDir;
+  final ProfileStorage storage;
   final StationInfo stationInfo;
   final void Function(String level, String message)? log;
 
   AlertHandler({
-    required this.dataDir,
+    required this.storage,
     required this.stationInfo,
     this.log,
   });
@@ -124,8 +125,9 @@ class AlertHandler {
     try {
       // Search recursively for the alert folder
       final alertPath = await AlertFolderUtils.findAlertPath(
-        '$dataDir/devices/$callsign/alerts',
+        'alerts',
         alertId,
+        storage: storage,
       );
 
       _log('INFO', 'getAlertDetails: looking for alert $alertId under callsign $callsign');
@@ -135,15 +137,10 @@ class AlertHandler {
         return {'error': 'Alert not found', 'http_status': 404};
       }
 
-      final alertDir = Directory(alertPath);
-
-      final reportFile = File('${alertDir.path}/report.txt');
-      if (!await reportFile.exists()) {
+      final reportContent = await storage.readString('$alertPath/report.txt');
+      if (reportContent == null) {
         return {'error': 'Alert report not found', 'http_status': 404};
       }
-
-      // Read the report content
-      final reportContent = await reportFile.readAsString();
 
       // Try to parse the report, but don't fail if parsing fails
       // The raw report_content will still be returned for clients to download
@@ -159,33 +156,30 @@ class AlertHandler {
       final photos = <String>[];
 
       // Check images/ subfolder first (new structure)
-      final imagesDir = Directory('${alertDir.path}/images');
-      if (await imagesDir.exists()) {
-        await for (final entity in imagesDir.list()) {
-          if (entity is File) {
-            final filename = entity.path.split('/').last;
-            final ext = filename.toLowerCase();
-            if (photoExtensions.any((e) => ext.endsWith(e))) {
-              photos.add('images/$filename');
-            }
+      final imagesEntries = await storage.listDirectory('$alertPath/images');
+      for (final entry in imagesEntries) {
+        if (!entry.isDirectory) {
+          final ext = entry.name.toLowerCase();
+          if (photoExtensions.any((e) => ext.endsWith(e))) {
+            photos.add('images/${entry.name}');
           }
         }
       }
 
       // Also check root folder for backwards compatibility
-      await for (final entity in alertDir.list()) {
-        if (entity is File) {
-          final filename = entity.path.split('/').last;
-          final ext = filename.toLowerCase();
+      final rootEntries = await storage.listDirectory(alertPath);
+      for (final entry in rootEntries) {
+        if (!entry.isDirectory) {
+          final ext = entry.name.toLowerCase();
           if (photoExtensions.any((e) => ext.endsWith(e))) {
-            photos.add(filename);
+            photos.add(entry.name);
           }
         }
       }
 
       // Find all comments (feedback/comments)
       final comments = <Map<String, dynamic>>[];
-      final feedbackComments = await FeedbackCommentUtils.loadComments(alertDir.path);
+      final feedbackComments = await FeedbackCommentUtils.loadComments(alertPath, storage: storage);
       for (final comment in feedbackComments) {
         comments.add({
           'filename': '${comment.id}.txt',
@@ -201,15 +195,16 @@ class AlertHandler {
       comments.sort((a, b) => (a['created'] as String).compareTo(b['created'] as String));
 
       // Read points from feedback/points.txt
-      final pointedBy = await AlertFolderUtils.readPointsFile(alertDir.path);
-      final verifiedByFeedback = await AlertFolderUtils.readVerificationsFile(alertDir.path);
+      final pointedBy = await AlertFolderUtils.readPointsFile(alertPath, storage: storage);
+      final verifiedByFeedback = await AlertFolderUtils.readVerificationsFile(alertPath, storage: storage);
       final mergedVerifiedBy = {
         ...?report?.verifiedBy,
         ...verifiedByFeedback,
       }.toList();
 
-      // Build file tree for sync
-      final fileTree = await FileTreeBuilder.build(alertDir.path);
+      // Build file tree for sync (requires absolute path)
+      final absoluteAlertPath = storage.getAbsolutePath(alertPath);
+      final fileTree = await FileTreeBuilder.build(absoluteAlertPath);
 
       _log('INFO', 'Alert details: found ${photos.length} photos, ${comments.length} comments, ${pointedBy.length} points');
 
@@ -312,36 +307,27 @@ class AlertHandler {
 
       // Try to find existing alert folder
       var alertPath = await AlertFolderUtils.findAlertPath(
-        '$dataDir/devices/$callsign/alerts',
+        'alerts',
         alertId,
+        storage: storage,
       );
 
       if (alertPath == null) {
         // Create new alert directory with proper structure
         // If coordinates provided, use region folder; otherwise use flat structure
         if (latitude != null && longitude != null) {
-          alertPath = AlertFolderUtils.buildAlertPathFromCoords(
-            baseDir: '$dataDir/devices',
-            callsign: callsign,
-            latitude: latitude,
-            longitude: longitude,
-            folderName: alertId,
-          );
+          final regionFolder = AlertFolderUtils.getRegionFolder(latitude, longitude);
+          alertPath = 'alerts/active/$regionFolder/$alertId';
         } else {
           // Fallback: flat structure without region folder
-          alertPath = '$dataDir/devices/$callsign/alerts/active/$alertId';
+          alertPath = 'alerts/active/$alertId';
         }
-        final alertDir = Directory(alertPath);
-        if (!await alertDir.exists()) {
-          await alertDir.create(recursive: true);
-        }
+        await storage.createDirectory(alertPath);
       }
 
       // Create images subfolder and use sequential naming
-      final imagesDir = Directory('$alertPath/images');
-      if (!await imagesDir.exists()) {
-        await imagesDir.create(recursive: true);
-      }
+      final imagesPath = '$alertPath/images';
+      await storage.createDirectory(imagesPath);
 
       // Get next sequential photo number
       final nextPhotoNum = await _getNextPhotoNumber(alertPath);
@@ -353,8 +339,7 @@ class AlertHandler {
 
       // Use sequential naming: photo{number}.{ext}
       final sequentialFilename = 'photo$nextPhotoNum$ext';
-      final photoFile = File('${imagesDir.path}/$sequentialFilename');
-      await photoFile.writeAsBytes(bytes);
+      await storage.writeBytes('$imagesPath/$sequentialFilename', Uint8List.fromList(bytes));
 
       _log('INFO', 'Uploaded alert photo: images/$sequentialFilename (${bytes.length} bytes)');
 
@@ -377,19 +362,17 @@ class AlertHandler {
   /// Get the next sequential photo number in an alert's images folder
   Future<int> _getNextPhotoNumber(String alertPath) async {
     int maxNumber = 0;
-    final imagesDir = Directory('$alertPath/images');
-    if (await imagesDir.exists()) {
-      await for (final entity in imagesDir.list()) {
-        if (entity is File) {
-          final filename = entity.path.split('/').last;
-          final baseName = filename.contains('.')
-              ? filename.substring(0, filename.lastIndexOf('.'))
-              : filename;
-          final match = RegExp(r'^photo(\d+)$').firstMatch(baseName);
-          if (match != null) {
-            final num = int.tryParse(match.group(1)!) ?? 0;
-            if (num > maxNumber) maxNumber = num;
-          }
+    final imagesPath = '$alertPath/images';
+    final entries = await storage.listDirectory(imagesPath);
+    for (final entry in entries) {
+      if (!entry.isDirectory) {
+        final baseName = entry.name.contains('.')
+            ? entry.name.substring(0, entry.name.lastIndexOf('.'))
+            : entry.name;
+        final match = RegExp(r'^photo(\d+)$').firstMatch(baseName);
+        if (match != null) {
+          final num = int.tryParse(match.group(1)!) ?? 0;
+          if (num > maxNumber) maxNumber = num;
         }
       }
     }
@@ -410,21 +393,22 @@ class AlertHandler {
 
     // Find the alert folder first
     final alertPath = await AlertFolderUtils.findAlertPath(
-      '$dataDir/devices/$callsign/alerts',
+      'alerts',
       alertId,
+      storage: storage,
     );
     if (alertPath == null) return null;
 
     // Check images/ subfolder first (new structure)
-    final imagesPhotoFile = File('$alertPath/images/$cleanFilename');
-    if (await imagesPhotoFile.exists()) {
-      return imagesPhotoFile.path;
+    final imagesPhotoPath = '$alertPath/images/$cleanFilename';
+    if (await storage.exists(imagesPhotoPath)) {
+      return storage.getAbsolutePath(imagesPhotoPath);
     }
 
     // Check root folder for backwards compatibility
-    final rootPhotoFile = File('$alertPath/$cleanFilename');
-    if (await rootPhotoFile.exists()) {
-      return rootPhotoFile.path;
+    final rootPhotoPath = '$alertPath/$cleanFilename';
+    if (await storage.exists(rootPhotoPath)) {
+      return storage.getAbsolutePath(rootPhotoPath);
     }
 
     return null;
@@ -434,43 +418,39 @@ class AlertHandler {
   // Internal helper methods
   // ============================================================
 
-  /// Load all alerts from devices directory
+  /// Load all alerts from alerts directory
   Future<List<Map<String, dynamic>>> _loadAllAlerts({bool includeAllStatuses = false}) async {
     final alerts = <Map<String, dynamic>>[];
-    final devicesDir = Directory('$dataDir/devices');
 
-    if (!await devicesDir.exists()) {
+    if (!await storage.directoryExists('alerts')) {
       return alerts;
     }
 
-    await for (final deviceEntity in devicesDir.list()) {
-      if (deviceEntity is! Directory) continue;
+    // Search recursively for report.txt files within alerts/
+    final entries = await storage.listDirectory('alerts', recursive: true);
+    for (final entry in entries) {
+      if (entry.isDirectory) continue;
+      if (!entry.name.endsWith('report.txt')) continue;
 
-      final callsign = deviceEntity.path.split('/').last;
-      final alertsDir = Directory('${deviceEntity.path}/alerts');
+      try {
+        final content = await storage.readString(entry.path);
+        if (content == null) continue;
 
-      if (!await alertsDir.exists()) continue;
+        // Extract the folder name from the entry path
+        // entry.path is like: alerts/active/region/folderName/report.txt
+        final alertDirPath = entry.path.replaceFirst('/report.txt', '').replaceFirst('\\report.txt', '');
+        final folderName = alertDirPath.split('/').last.split('\\').last;
 
-      // Search recursively for report.txt files
-      await for (final alertEntity in alertsDir.list(recursive: true)) {
-        if (alertEntity is! File) continue;
-        if (!alertEntity.path.endsWith('/report.txt')) continue;
+        final alert = _parseAlertContent(content, stationInfo.callsign ?? 'unknown', folderName);
 
-        try {
-          final content = await alertEntity.readAsString();
-          final alertDir = Directory(alertEntity.parent.path);
-          final folderName = alertDir.path.split('/').last;
-          final alert = _parseAlertContent(content, callsign, folderName);
-
-          // Include based on status filter
-          if (includeAllStatuses ||
-              alert['status'] == 'open' ||
-              alert['status'] == 'in-progress') {
-            alerts.add(alert);
-          }
-        } catch (e) {
-          _log('WARN', 'Failed to parse alert: ${alertEntity.path}');
+        // Include based on status filter
+        if (includeAllStatuses ||
+            alert['status'] == 'open' ||
+            alert['status'] == 'in-progress') {
+          alerts.add(alert);
         }
+      } catch (e) {
+        _log('WARN', 'Failed to parse alert: ${entry.path}');
       }
     }
 
@@ -487,37 +467,31 @@ class AlertHandler {
 
   /// Find alert by ID (folder name or API ID)
   Future<String?> _findAlertById(String alertId) async {
-    final devicesDir = Directory('$dataDir/devices');
-    if (!await devicesDir.exists()) return null;
+    if (!await storage.directoryExists('alerts')) return null;
 
-    await for (final deviceEntity in devicesDir.list()) {
-      if (deviceEntity is! Directory) continue;
+    // Search recursively within alerts/
+    final entries = await storage.listDirectory('alerts', recursive: true);
+    for (final entry in entries) {
+      if (entry.isDirectory) continue;
+      if (!entry.name.endsWith('report.txt')) continue;
 
-      final alertsDir = Directory('${deviceEntity.path}/alerts');
-      if (!await alertsDir.exists()) continue;
+      final alertDirPath = entry.path.replaceFirst('/report.txt', '').replaceFirst('\\report.txt', '');
+      final folderName = alertDirPath.split('/').last.split('\\').last;
 
-      // Search recursively
-      await for (final alertEntity in alertsDir.list(recursive: true)) {
-        if (alertEntity is! File) continue;
-        if (!alertEntity.path.endsWith('/report.txt')) continue;
-
-        final alertDir = alertEntity.parent;
-        final folderName = alertDir.path.split('/').last;
-
-        // Match by folder name
-        if (folderName == alertId) {
-          return alertDir.path;
-        }
-
-        // Also match by API_ID in report.txt
-        try {
-          final content = await alertEntity.readAsString();
-          final apiIdMatch = RegExp(r'--> apiId: (.+)').firstMatch(content);
-          if (apiIdMatch != null && apiIdMatch.group(1)?.trim() == alertId) {
-            return alertDir.path;
-          }
-        } catch (_) {}
+      // Match by folder name
+      if (folderName == alertId) {
+        return alertDirPath;
       }
+
+      // Also match by API_ID in report.txt
+      try {
+        final content = await storage.readString(entry.path);
+        if (content == null) continue;
+        final apiIdMatch = RegExp(r'--> apiId: (.+)').firstMatch(content);
+        if (apiIdMatch != null && apiIdMatch.group(1)?.trim() == alertId) {
+          return alertDirPath;
+        }
+      } catch (_) {}
     }
     return null;
   }

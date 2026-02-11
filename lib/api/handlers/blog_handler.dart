@@ -6,9 +6,8 @@
  * Enables remote devices to view posts and add/delete comments.
  */
 
-import 'dart:io';
-
 import '../../models/blog_post.dart';
+import '../../services/profile_storage.dart';
 import '../../util/blog_folder_utils.dart';
 import '../../util/feedback_folder_utils.dart';
 import '../../util/nostr_event.dart';
@@ -16,22 +15,17 @@ import '../../util/nostr_crypto.dart';
 
 /// Blog API handlers for device-hosted blogs
 class BlogHandler {
-  final String dataDir;
-  final String callsign;
+  final ProfileStorage storage;
   final void Function(String level, String message)? log;
 
   BlogHandler({
-    required this.dataDir,
-    required this.callsign,
+    required this.storage,
     this.log,
   });
 
   void _log(String level, String message) {
     log?.call(level, message);
   }
-
-  /// Get the blog path for this device
-  String get _blogPath => '$dataDir/devices/$callsign/blog';
 
   // ============================================================
   // GET /api/blog - List all blog posts
@@ -100,7 +94,7 @@ class BlogHandler {
   Future<Map<String, dynamic>> getPostDetails(String postId) async {
     try {
       // Find the post folder
-      final postPath = await BlogFolderUtils.findPostPath(_blogPath, postId);
+      final postPath = await BlogFolderUtils.findPostPath('blog', postId, storage: storage);
 
       if (postPath == null) {
         _log('WARN', 'getPostDetails: post not found: $postId');
@@ -108,12 +102,12 @@ class BlogHandler {
       }
 
       // Read post content
-      final postFile = File(BlogFolderUtils.buildPostFilePath(postPath));
-      if (!await postFile.exists()) {
+      final postFilePath = BlogFolderUtils.buildPostFilePath(postPath);
+      final postContent = await storage.readString(postFilePath);
+
+      if (postContent == null) {
         return {'error': 'Post file not found', 'http_status': 404};
       }
-
-      final postContent = await postFile.readAsString();
 
       // Parse the post
       BlogPost? post;
@@ -129,7 +123,7 @@ class BlogHandler {
       }
 
       // Load comments
-      final comments = await BlogFolderUtils.loadComments(postPath);
+      final comments = await BlogFolderUtils.loadComments(postPath, storage: storage);
       final commentsList = comments.map((c) => {
         'id': c.id,
         'author': c.author,
@@ -141,13 +135,11 @@ class BlogHandler {
 
       // Find attached files
       final files = <String>[];
-      final filesDir = Directory(BlogFolderUtils.buildFilesPath(postPath));
-      if (await filesDir.exists()) {
-        await for (final entity in filesDir.list()) {
-          if (entity is File) {
-            final filename = entity.path.split('/').last;
-            files.add(filename);
-          }
+      final filesPath = BlogFolderUtils.buildFilesPath(postPath);
+      final fileEntries = await storage.listDirectory(filesPath);
+      for (final entry in fileEntries) {
+        if (!entry.isDirectory) {
+          files.add(entry.name);
         }
       }
 
@@ -215,16 +207,16 @@ class BlogHandler {
       }
 
       // Find the post folder
-      final postPath = await BlogFolderUtils.findPostPath(_blogPath, postId);
+      final postPath = await BlogFolderUtils.findPostPath('blog', postId, storage: storage);
 
       if (postPath == null) {
         return {'error': 'Post not found', 'http_status': 404};
       }
 
       // Verify post is published
-      final postFile = File(BlogFolderUtils.buildPostFilePath(postPath));
-      if (await postFile.exists()) {
-        final postContent = await postFile.readAsString();
+      final postFilePath = BlogFolderUtils.buildPostFilePath(postPath);
+      final postContent = await storage.readString(postFilePath);
+      if (postContent != null) {
         try {
           final post = BlogPost.fromText(postContent, postId);
           if (!post.isPublished) {
@@ -276,6 +268,7 @@ class BlogHandler {
         content: content,
         npub: npub,
         signature: signature,
+        storage: storage,
       );
 
       _log('INFO', 'Comment added to post $postId by $author (verified)');
@@ -309,23 +302,23 @@ class BlogHandler {
   ) async {
     try {
       // Find the post folder
-      final postPath = await BlogFolderUtils.findPostPath(_blogPath, postId);
+      final postPath = await BlogFolderUtils.findPostPath('blog', postId, storage: storage);
 
       if (postPath == null) {
         return {'error': 'Post not found', 'http_status': 404};
       }
 
       // Load the comment to check permissions
-      final comment = await BlogFolderUtils.getComment(postPath, commentId);
+      final comment = await BlogFolderUtils.getComment(postPath, commentId, storage: storage);
       if (comment == null) {
         return {'error': 'Comment not found', 'http_status': 404};
       }
 
       // Load post to check if requester is post author
-      final postFile = File(BlogFolderUtils.buildPostFilePath(postPath));
+      final postFilePath = BlogFolderUtils.buildPostFilePath(postPath);
+      final postContent = await storage.readString(postFilePath);
       String? postNpub;
-      if (await postFile.exists()) {
-        final postContent = await postFile.readAsString();
+      if (postContent != null) {
         try {
           final post = BlogPost.fromText(postContent, postId);
           postNpub = post.npub;
@@ -342,7 +335,7 @@ class BlogHandler {
       }
 
       // Delete the comment
-      final deleted = await BlogFolderUtils.deleteComment(postPath, commentId);
+      final deleted = await BlogFolderUtils.deleteComment(postPath, commentId, storage: storage);
 
       if (deleted) {
         _log('INFO', 'Comment $commentId deleted from post $postId by $requesterNpub');
@@ -374,12 +367,11 @@ class BlogHandler {
       return null;
     }
 
-    final postPath = await BlogFolderUtils.findPostPath(_blogPath, postId);
+    final postPath = await BlogFolderUtils.findPostPath('blog', postId, storage: storage);
     if (postPath == null) return null;
 
     final filePath = '${BlogFolderUtils.buildFilesPath(postPath)}/$filename';
-    final file = File(filePath);
-    if (await file.exists()) {
+    if (await storage.exists(filePath)) {
       return filePath;
     }
 
@@ -394,16 +386,16 @@ class BlogHandler {
   Future<Map<String, dynamic>> getFeedback(String postId, {String? npub}) async {
     try {
       // Find the post folder
-      final postPath = await BlogFolderUtils.findPostPath(_blogPath, postId);
+      final postPath = await BlogFolderUtils.findPostPath('blog', postId, storage: storage);
 
       if (postPath == null) {
         return {'error': 'Post not found', 'http_status': 404};
       }
 
       // Verify post is published
-      final postFile = File(BlogFolderUtils.buildPostFilePath(postPath));
-      if (await postFile.exists()) {
-        final postContent = await postFile.readAsString();
+      final postFilePath = BlogFolderUtils.buildPostFilePath(postPath);
+      final postContent = await storage.readString(postFilePath);
+      if (postContent != null) {
         try {
           final post = BlogPost.fromText(postContent, postId);
           if (!post.isPublished) {
@@ -415,7 +407,7 @@ class BlogHandler {
       }
 
       // Get all feedback counts
-      final counts = await FeedbackFolderUtils.getAllFeedbackCounts(postPath);
+      final counts = await FeedbackFolderUtils.getAllFeedbackCounts(postPath, storage: storage);
 
       final response = {
         'success': true,
@@ -441,7 +433,7 @@ class BlogHandler {
 
       // Add user state if npub provided
       if (npub != null && npub.isNotEmpty) {
-        final userState = await FeedbackFolderUtils.getUserFeedbackState(postPath, npub);
+        final userState = await FeedbackFolderUtils.getUserFeedbackState(postPath, npub, storage: storage);
         response['user_state'] = {
           'has_liked': userState[FeedbackFolderUtils.feedbackTypeLikes] ?? false,
           'has_pointed': userState[FeedbackFolderUtils.feedbackTypePoints] ?? false,
@@ -592,16 +584,16 @@ class BlogHandler {
       final npub = event.npub;
 
       // Find the post folder
-      final postPath = await BlogFolderUtils.findPostPath(_blogPath, postId);
+      final postPath = await BlogFolderUtils.findPostPath('blog', postId, storage: storage);
 
       if (postPath == null) {
         return {'error': 'Post not found', 'http_status': 404};
       }
 
       // Verify post is published
-      final postFile = File(BlogFolderUtils.buildPostFilePath(postPath));
-      if (await postFile.exists()) {
-        final postContent = await postFile.readAsString();
+      final postFilePath = BlogFolderUtils.buildPostFilePath(postPath);
+      final postContent = await storage.readString(postFilePath);
+      if (postContent != null) {
         try {
           final post = BlogPost.fromText(postContent, postId);
           if (!post.isPublished) {
@@ -617,6 +609,7 @@ class BlogHandler {
         postPath,
         feedbackType,
         event,
+        storage: storage,
       );
 
       if (isNowActive == null) {
@@ -628,7 +621,7 @@ class BlogHandler {
       }
 
       // Get updated count
-      final count = await FeedbackFolderUtils.getFeedbackCount(postPath, feedbackType);
+      final count = await FeedbackFolderUtils.getFeedbackCount(postPath, feedbackType, storage: storage);
 
       final action = isNowActive ? 'added' : 'removed';
       _log('INFO', '$actionName $action for post $postId by $npub (verified)');
@@ -653,32 +646,30 @@ class BlogHandler {
   /// Load all posts from blog directory
   Future<List<Map<String, dynamic>>> _loadAllPosts({bool publishedOnly = false}) async {
     final posts = <Map<String, dynamic>>[];
-    final blogDir = Directory(_blogPath);
 
-    if (!await blogDir.exists()) {
-      return posts;
-    }
+    // List year directories under 'blog'
+    final yearEntries = await storage.listDirectory('blog');
 
-    // Iterate through year directories
-    await for (final yearEntity in blogDir.list()) {
-      if (yearEntity is! Directory) continue;
+    for (final yearEntry in yearEntries) {
+      if (!yearEntry.isDirectory) continue;
 
-      final yearName = yearEntity.path.split('/').last;
+      final yearName = yearEntry.name;
       final year = int.tryParse(yearName);
       if (year == null) continue;
 
-      // Iterate through post directories
-      await for (final postEntity in yearEntity.list()) {
-        if (postEntity is! Directory) continue;
+      // List post directories under this year
+      final postEntries = await storage.listDirectory('blog/$yearName');
 
-        final postId = postEntity.path.split('/').last;
-        final postFile = File('${postEntity.path}/post.md');
+      for (final postEntry in postEntries) {
+        if (!postEntry.isDirectory) continue;
 
-        if (!await postFile.exists()) continue;
+        final postId = postEntry.name;
+        final postContent = await storage.readString('blog/$yearName/$postId/post.md');
+
+        if (postContent == null) continue;
 
         try {
-          final content = await postFile.readAsString();
-          final post = BlogPost.fromText(content, postId);
+          final post = BlogPost.fromText(postContent, postId);
 
           // Filter by published status
           if (publishedOnly && !post.isPublished) {
@@ -686,7 +677,8 @@ class BlogHandler {
           }
 
           // Count comments
-          final comments = await BlogFolderUtils.loadComments(postEntity.path);
+          final postPath = 'blog/$yearName/$postId';
+          final comments = await BlogFolderUtils.loadComments(postPath, storage: storage);
 
           posts.add({
             'id': post.id,
@@ -705,7 +697,7 @@ class BlogHandler {
             if (post.npub != null) 'npub': post.npub,
           });
         } catch (e) {
-          _log('WARN', 'Failed to parse post: ${postEntity.path}');
+          _log('WARN', 'Failed to parse post: blog/$yearName/$postId');
         }
       }
     }

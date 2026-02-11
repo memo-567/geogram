@@ -21,6 +21,7 @@ import '../services/nostr_storage_paths.dart';
 import '../services/nip05_registry_service.dart';
 import '../services/geoip_service.dart';
 import '../util/nostr_crypto.dart';
+import '../services/profile_storage.dart';
 import '../api/handlers/alert_handler.dart';
 import '../api/handlers/place_handler.dart';
 import '../api/handlers/feedback_handler.dart';
@@ -119,7 +120,7 @@ abstract class StationServerBase {
         throw StateError('alertApi accessed before initialization');
       }
       _alertApi = AlertHandler(
-        dataDir: _dataDir!,
+        storage: FilesystemProfileStorage('$_dataDir/devices/${_settings.callsign}'),
         stationInfo: StationInfo(
           name: _settings.name ?? 'Geogram Station',
           callsign: _settings.callsign,
@@ -157,7 +158,7 @@ abstract class StationServerBase {
         throw StateError('feedbackApi accessed before initialization');
       }
       _feedbackApi = FeedbackHandler(
-        dataDir: _dataDir!,
+        storage: FilesystemProfileStorage('$_dataDir/devices/${_settings.callsign}'),
         log: (level, message) => log(level, message),
       );
     }

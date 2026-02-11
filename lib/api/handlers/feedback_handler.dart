@@ -6,10 +6,7 @@
  * Implements /api/feedback endpoints using FeedbackFolderUtils.
  */
 
-import 'dart:io' if (dart.library.html) '../../platform/io_stub.dart';
-
-import 'package:path/path.dart' as path;
-
+import '../../services/profile_storage.dart';
 import '../../util/blog_folder_utils.dart';
 import '../../util/feedback_comment_utils.dart';
 import '../../util/feedback_folder_utils.dart';
@@ -27,11 +24,11 @@ class FeedbackContentLocation {
 }
 
 class FeedbackHandler {
-  final String dataDir;
+  final ProfileStorage storage;
   final void Function(String level, String message)? log;
 
   FeedbackHandler({
-    required this.dataDir,
+    required this.storage,
     this.log,
   });
 
@@ -58,8 +55,8 @@ class FeedbackHandler {
         return {'error': 'Content not found', 'http_status': 404};
       }
 
-      final counts = await FeedbackFolderUtils.getAllFeedbackCounts(location.contentPath);
-      final commentCount = await FeedbackCommentUtils.getCommentCount(location.contentPath);
+      final counts = await FeedbackFolderUtils.getAllFeedbackCounts(location.contentPath, storage: storage);
+      final commentCount = await FeedbackCommentUtils.getCommentCount(location.contentPath, storage: storage);
 
       final response = <String, dynamic>{
         'success': true,
@@ -86,7 +83,7 @@ class FeedbackHandler {
       };
 
       if (npub != null && npub.isNotEmpty) {
-        final userState = await FeedbackFolderUtils.getUserFeedbackState(location.contentPath, npub);
+        final userState = await FeedbackFolderUtils.getUserFeedbackState(location.contentPath, npub, storage: storage);
         response['user_state'] = {
           'liked': userState[FeedbackFolderUtils.feedbackTypeLikes] ?? false,
           'pointed': userState[FeedbackFolderUtils.feedbackTypePoints] ?? false,
@@ -104,7 +101,7 @@ class FeedbackHandler {
       }
 
       if (includeComments) {
-        final comments = await FeedbackCommentUtils.loadComments(location.contentPath);
+        final comments = await FeedbackCommentUtils.loadComments(location.contentPath, storage: storage);
         final start = commentOffset < 0 ? 0 : commentOffset;
         final end = commentLimit <= 0
             ? comments.length
@@ -142,9 +139,9 @@ class FeedbackHandler {
         return {'error': 'Content not found', 'http_status': 404};
       }
 
-      final viewStats = await FeedbackFolderUtils.getViewStats(location.contentPath);
-      final counts = await FeedbackFolderUtils.getAllFeedbackCounts(location.contentPath);
-      final commentCount = await FeedbackCommentUtils.getCommentCount(location.contentPath);
+      final viewStats = await FeedbackFolderUtils.getViewStats(location.contentPath, storage: storage);
+      final counts = await FeedbackFolderUtils.getAllFeedbackCounts(location.contentPath, storage: storage);
+      final commentCount = await FeedbackCommentUtils.getCommentCount(location.contentPath, storage: storage);
 
       return {
         'success': true,
@@ -220,6 +217,7 @@ class FeedbackHandler {
         location.contentPath,
         feedbackType,
         event,
+        storage: storage,
       );
 
       if (isNowActive == null) {
@@ -230,7 +228,7 @@ class FeedbackHandler {
         };
       }
 
-      final count = await FeedbackFolderUtils.getFeedbackCount(location.contentPath, feedbackType);
+      final count = await FeedbackFolderUtils.getFeedbackCount(location.contentPath, feedbackType, storage: storage);
       final action = isNowActive ? 'added' : 'removed';
 
       await _touchAlertLastModified(location.contentPath);
@@ -288,11 +286,13 @@ class FeedbackHandler {
         location.contentPath,
         FeedbackFolderUtils.feedbackTypeVerifications,
         event,
+        storage: storage,
       );
 
       final count = await FeedbackFolderUtils.getFeedbackCount(
         location.contentPath,
         FeedbackFolderUtils.feedbackTypeVerifications,
+        storage: storage,
       );
 
       await _touchAlertLastModified(location.contentPath, verifiedNpub: event.npub);
@@ -348,6 +348,7 @@ class FeedbackHandler {
       final recorded = await FeedbackFolderUtils.recordViewEvent(
         location.contentPath,
         event,
+        storage: storage,
       );
 
       if (!recorded) {
@@ -358,7 +359,7 @@ class FeedbackHandler {
         };
       }
 
-      final stats = await FeedbackFolderUtils.getViewStats(location.contentPath);
+      final stats = await FeedbackFolderUtils.getViewStats(location.contentPath, storage: storage);
 
       return {
         'success': true,
@@ -402,6 +403,7 @@ class FeedbackHandler {
         content: content,
         npub: npub,
         signature: signature,
+        storage: storage,
       );
 
       await _touchAlertLastModified(location.contentPath);
@@ -485,167 +487,76 @@ class FeedbackHandler {
   }
 
   Future<FeedbackContentLocation?> _resolveAlertPath(String alertId, {String? callsign}) async {
-    final devicesDir = Directory('$dataDir/devices');
-    if (!await devicesDir.exists()) return null;
-
-    Future<FeedbackContentLocation?> searchCallsign(String callsign) async {
-      final alertsDir = Directory('$dataDir/devices/$callsign/alerts');
-      if (!await alertsDir.exists()) return null;
-
-      final alertPath = await _findAlertById(alertsDir, alertId);
-      if (alertPath != null) {
-        return FeedbackContentLocation(contentPath: alertPath, callsign: callsign);
-      }
-      return null;
-    }
-
-    if (callsign != null && callsign.isNotEmpty) {
-      return searchCallsign(callsign);
-    }
-
-    await for (final deviceEntity in devicesDir.list()) {
-      if (deviceEntity is! Directory) continue;
-      final deviceCallsign = path.basename(deviceEntity.path);
-      final match = await searchCallsign(deviceCallsign);
-      if (match != null) return match;
-    }
-
-    return null;
-  }
-
-  Future<String?> _findAlertById(Directory alertsDir, String alertId) async {
-    if (!await alertsDir.exists()) return null;
-
-    await for (final alertEntity in alertsDir.list(recursive: true)) {
-      if (alertEntity is! File) continue;
-      if (!alertEntity.path.endsWith('/report.txt')) continue;
-
-      final alertDir = alertEntity.parent;
-      final folderName = path.basename(alertDir.path);
-
-      if (folderName == alertId) {
-        return alertDir.path;
-      }
-
-      try {
-        final content = await alertEntity.readAsString();
-        final report = Report.fromText(content, folderName);
-        if (report.apiId == alertId) {
-          return alertDir.path;
+    // Search alerts recursively
+    final entries = await storage.listDirectory('alerts', recursive: true);
+    for (final entry in entries) {
+      if (entry.isDirectory && entry.name == alertId) {
+        if (await storage.exists('${entry.path}/report.txt')) {
+          return FeedbackContentLocation(contentPath: entry.path, callsign: callsign ?? '');
         }
-      } catch (_) {}
+      }
+      if (!entry.isDirectory && entry.name == 'report.txt') {
+        final alertDir = entry.path.replaceFirst('/report.txt', '');
+        final folderName = alertDir.split('/').last;
+        if (folderName == alertId) {
+          return FeedbackContentLocation(contentPath: alertDir, callsign: callsign ?? '');
+        }
+        // Also check apiId
+        try {
+          final content = await storage.readString(entry.path);
+          if (content != null) {
+            final report = Report.fromText(content, folderName);
+            if (report.apiId == alertId) {
+              return FeedbackContentLocation(contentPath: alertDir, callsign: callsign ?? '');
+            }
+          }
+        } catch (_) {}
+      }
     }
-
     return null;
   }
 
   Future<FeedbackContentLocation?> _resolveBlogPath(String postId, {String? callsign}) async {
-    final devicesDir = Directory('$dataDir/devices');
-    if (!await devicesDir.exists()) return null;
-
-    Future<FeedbackContentLocation?> searchCallsign(String callsign) async {
-      final blogPath = '$dataDir/devices/$callsign/blog';
-      final postPath = await BlogFolderUtils.findPostPath(blogPath, postId);
-      if (postPath != null) {
-        return FeedbackContentLocation(contentPath: postPath, callsign: callsign);
-      }
-      return null;
+    final postPath = await BlogFolderUtils.findPostPath('blog', postId, storage: storage);
+    if (postPath != null) {
+      return FeedbackContentLocation(contentPath: postPath, callsign: callsign ?? '');
     }
-
-    if (callsign != null && callsign.isNotEmpty) {
-      return searchCallsign(callsign);
-    }
-
-    await for (final deviceEntity in devicesDir.list()) {
-      if (deviceEntity is! Directory) continue;
-      final deviceCallsign = path.basename(deviceEntity.path);
-      final match = await searchCallsign(deviceCallsign);
-      if (match != null) return match;
-    }
-
     return null;
   }
 
   Future<FeedbackContentLocation?> _resolvePlacePath(String folderName, {String? callsign}) async {
-    final devicesDir = Directory('$dataDir/devices');
-    if (!await devicesDir.exists()) return null;
-
-    Future<FeedbackContentLocation?> searchCallsign(String callsign) async {
-      final placesRoot = Directory('$dataDir/devices/$callsign/places');
-      if (!await placesRoot.exists()) return null;
-
-      await for (final entity in placesRoot.list(recursive: true)) {
-        if (entity is! File) continue;
-        if (!entity.path.endsWith('/place.txt')) continue;
-
-        final folder = entity.parent;
-        if (path.basename(folder.path) == folderName) {
-          return FeedbackContentLocation(contentPath: folder.path, callsign: callsign);
+    final entries = await storage.listDirectory('places', recursive: true);
+    for (final entry in entries) {
+      if (!entry.isDirectory && entry.name == 'place.txt') {
+        final placeDir = entry.path.replaceFirst('/place.txt', '');
+        final placeFolderName = placeDir.split('/').last;
+        if (placeFolderName == folderName) {
+          return FeedbackContentLocation(contentPath: placeDir, callsign: callsign ?? '');
         }
       }
-      return null;
     }
-
-    if (callsign != null && callsign.isNotEmpty) {
-      return searchCallsign(callsign);
-    }
-
-    await for (final deviceEntity in devicesDir.list()) {
-      if (deviceEntity is! Directory) continue;
-      final deviceCallsign = path.basename(deviceEntity.path);
-      final match = await searchCallsign(deviceCallsign);
-      if (match != null) return match;
-    }
-
     return null;
   }
 
   Future<FeedbackContentLocation?> _resolveEventPath(String eventId, {String? callsign}) async {
-    final devicesDir = Directory('$dataDir/devices');
-    if (!await devicesDir.exists()) return null;
-
-    Future<FeedbackContentLocation?> searchCallsign(String callsign) async {
-      final eventsRoot = Directory('$dataDir/devices/$callsign/events');
-      if (!await eventsRoot.exists()) return null;
-
-      final year = _extractEventYear(eventId);
-      if (year != null) {
-        final eventDir = Directory('${eventsRoot.path}/$year/$eventId');
-        final eventFile = File('${eventDir.path}/event.txt');
-        if (await eventFile.exists()) {
-          return FeedbackContentLocation(contentPath: eventDir.path, callsign: callsign);
-        }
+    // Try direct lookup with year extracted from eventId
+    final year = _extractEventYear(eventId);
+    if (year != null) {
+      if (await storage.exists('events/$year/$eventId/event.txt')) {
+        return FeedbackContentLocation(contentPath: 'events/$year/$eventId', callsign: callsign ?? '');
       }
-
-      await for (final yearEntity in eventsRoot.list()) {
-        if (yearEntity is! Directory) continue;
-        final eventDir = Directory('${yearEntity.path}/$eventId');
-        final eventFile = File('${eventDir.path}/event.txt');
-        if (await eventFile.exists()) {
-          return FeedbackContentLocation(contentPath: eventDir.path, callsign: callsign);
-        }
-      }
-
-      await for (final entity in eventsRoot.list(recursive: true)) {
-        if (entity is! File) continue;
-        if (!entity.path.endsWith('/event.txt')) continue;
-        if (path.basename(entity.parent.path) == eventId) {
-          return FeedbackContentLocation(contentPath: entity.parent.path, callsign: callsign);
-        }
-      }
-
-      return null;
     }
 
-    if (callsign != null && callsign.isNotEmpty) {
-      return searchCallsign(callsign);
-    }
-
-    await for (final deviceEntity in devicesDir.list()) {
-      if (deviceEntity is! Directory) continue;
-      final deviceCallsign = path.basename(deviceEntity.path);
-      final match = await searchCallsign(deviceCallsign);
-      if (match != null) return match;
+    // Fallback: search recursively
+    final entries = await storage.listDirectory('events', recursive: true);
+    for (final entry in entries) {
+      if (!entry.isDirectory && entry.name == 'event.txt') {
+        final eventDir = entry.path.replaceFirst('/event.txt', '');
+        final eventFolderName = eventDir.split('/').last;
+        if (eventFolderName == eventId) {
+          return FeedbackContentLocation(contentPath: eventDir, callsign: callsign ?? '');
+        }
+      }
     }
 
     return null;
@@ -660,11 +571,11 @@ class FeedbackHandler {
   }
 
   Future<void> _touchAlertLastModified(String contentPath, {String? verifiedNpub}) async {
-    final reportFile = File('$contentPath/report.txt');
-    if (!await reportFile.exists()) return;
+    if (!await storage.exists('$contentPath/report.txt')) return;
 
     try {
-      final content = await reportFile.readAsString();
+      final content = await storage.readString('$contentPath/report.txt');
+      if (content == null) return;
       final now = DateTime.now().toUtc().toIso8601String();
 
       List<String>? verifiedBy;
@@ -676,7 +587,7 @@ class FeedbackHandler {
       }
 
       final updated = _updateAlertFeedback(content, verifiedBy: verifiedBy, lastModified: now);
-      await reportFile.writeAsString(updated, flush: true);
+      await storage.writeString('$contentPath/report.txt', updated);
     } catch (e) {
       _log('WARN', 'Failed to update alert last_modified: $e');
     }

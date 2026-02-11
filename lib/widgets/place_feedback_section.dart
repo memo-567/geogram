@@ -7,10 +7,12 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as path;
 
 import '../models/place.dart';
+import '../services/app_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/place_feedback_service.dart';
 import '../services/profile_service.dart';
+import '../services/profile_storage.dart';
 import '../util/feedback_comment_utils.dart';
 import '../util/feedback_folder_utils.dart';
 
@@ -72,9 +74,11 @@ class _PlaceLikeButtonState extends State<PlaceLikeButton> {
     }
 
     try {
+      final storage = AppService().profileStorage!;
       final npubs = await FeedbackFolderUtils.readFeedbackFile(
         contentPath,
         FeedbackFolderUtils.feedbackTypeLikes,
+        storage: storage,
       );
 
       final npub = _currentNpub;
@@ -125,24 +129,28 @@ class _PlaceLikeButtonState extends State<PlaceLikeButton> {
         return;
       }
 
+      final storage = AppService().profileStorage!;
       bool? isActive = stationResult.isActive;
       if (isActive == true) {
         await FeedbackFolderUtils.addFeedbackEvent(
           contentPath,
           FeedbackFolderUtils.feedbackTypeLikes,
           event,
+          storage: storage,
         );
       } else if (isActive == false) {
         await FeedbackFolderUtils.removeFeedbackEvent(
           contentPath,
           FeedbackFolderUtils.feedbackTypeLikes,
           event.npub,
+          storage: storage,
         );
       } else {
         isActive = await FeedbackFolderUtils.toggleFeedbackEvent(
           contentPath,
           FeedbackFolderUtils.feedbackTypeLikes,
           event,
+          storage: storage,
         );
       }
 
@@ -154,6 +162,7 @@ class _PlaceLikeButtonState extends State<PlaceLikeButton> {
       final count = stationResult.count ?? await FeedbackFolderUtils.getFeedbackCount(
         contentPath,
         FeedbackFolderUtils.feedbackTypeLikes,
+        storage: storage,
       );
 
       if (!mounted) return;
@@ -285,9 +294,11 @@ class _PlaceLikeCountBadgeState extends State<PlaceLikeCountBadge> {
     }
 
     try {
+      final storage = AppService().profileStorage!;
       final count = await FeedbackFolderUtils.getFeedbackCount(
         contentPath,
         FeedbackFolderUtils.feedbackTypeLikes,
+        storage: storage,
       );
       if (!mounted) return;
       setState(() => _count = count);
@@ -385,7 +396,8 @@ class _PlaceFeedbackSectionState extends State<PlaceFeedbackSection> {
 
     setState(() => _isLoading = true);
     try {
-      final comments = await FeedbackCommentUtils.loadComments(contentPath);
+      final storage = AppService().profileStorage!;
+      final comments = await FeedbackCommentUtils.loadComments(contentPath, storage: storage);
 
       comments.sort((a, b) => _parseCommentDate(b.created).compareTo(_parseCommentDate(a.created)));
 
@@ -423,6 +435,7 @@ class _PlaceFeedbackSectionState extends State<PlaceFeedbackSection> {
 
     setState(() => _isSubmitting = true);
     try {
+      final storage = AppService().profileStorage!;
       final signature = await _feedbackService.signComment(_placeId, content);
       await FeedbackCommentUtils.writeComment(
         contentPath: contentPath,
@@ -430,6 +443,7 @@ class _PlaceFeedbackSectionState extends State<PlaceFeedbackSection> {
         content: content,
         npub: profile.npub.isNotEmpty ? profile.npub : null,
         signature: signature,
+        storage: storage,
       );
 
       _commentController.clear();

@@ -13,6 +13,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import '../models/report.dart';
 import '../util/alert_folder_utils.dart';
+import 'profile_storage.dart';
 import 'log_service.dart';
 import 'station_service.dart';
 import 'config_service.dart';
@@ -360,9 +361,11 @@ class StationAlertService {
         final callsign = alert.metadata['station_callsign'] ?? 'unknown';
 
         // Search for existing alert folder (may be in active/{region}/ subfolder)
+        final alertStorage = FilesystemProfileStorage('$devicesDir/$callsign');
         String? existingAlertPath = await AlertFolderUtils.findAlertPath(
           '$devicesDir/$callsign/alerts',
           alert.folderName,
+          storage: alertStorage,
         );
 
         final String alertPath;
@@ -592,6 +595,7 @@ class StationAlertService {
         // Skip our own callsign
         // TODO: Get current user's callsign and skip it
 
+        final deviceStorage = FilesystemProfileStorage(deviceEntity.path);
         final alertsDir = Directory('${deviceEntity.path}/alerts');
         if (!await alertsDir.exists()) continue;
 
@@ -612,7 +616,7 @@ class StationAlertService {
             final report = Report.fromText(content, folderName);
 
             // Read points from feedback/points.txt
-            final pointedBy = await AlertFolderUtils.readPointsFile(alertEntity.path);
+            final pointedBy = await AlertFolderUtils.readPointsFile(alertEntity.path, storage: deviceStorage);
 
             // Mark as from station
             final metadata = Map<String, String>.from(report.metadata);
@@ -698,9 +702,11 @@ class StationAlertService {
       if (!storageConfig.isInitialized) return;
 
       final devicesDir = storageConfig.devicesDir;
+      final syncStorage = FilesystemProfileStorage('$devicesDir/$stationCallsign');
       final alertPath = await AlertFolderUtils.findAlertPath(
         '$devicesDir/$stationCallsign/alerts',
         folderName,
+        storage: syncStorage,
       );
       if (alertPath == null) return;
 

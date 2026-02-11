@@ -17,6 +17,7 @@ import 'models/event.dart';
 import 'models/report.dart';
 import 'services/event_service.dart';
 import 'util/app_constants.dart';
+import 'services/profile_storage.dart';
 import 'api/handlers/alert_handler.dart';
 import 'api/handlers/place_handler.dart';
 import 'api/handlers/feedback_handler.dart';
@@ -665,7 +666,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin {
         throw StateError('alertApi accessed before init() - _dataDir is null');
       }
       _alertApi = AlertHandler(
-        dataDir: _dataDir!,
+        storage: FilesystemProfileStorage('$_dataDir/devices/${_settings.callsign}'),
         stationInfo: StationInfo(
           name: _settings.name ?? 'Geogram Station',
           callsign: _settings.callsign,
@@ -703,7 +704,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin {
         throw StateError('feedbackApi accessed before init() - _dataDir is null');
       }
       _feedbackApi = FeedbackHandler(
-        dataDir: _dataDir!,
+        storage: FilesystemProfileStorage('$_dataDir/devices/${_settings.callsign}'),
         log: (level, message) => _log(level, message),
       );
     }
@@ -3447,7 +3448,8 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin {
   /// Find alert path by folder name (searches recursively for backwards compatibility)
   Future<String?> _findAlertPath(String callsign, String folderName) async {
     final devicesDir = PureStorageConfig().devicesDir;
-    return AlertFolderUtils.findAlertPath('$devicesDir/$callsign/alerts', folderName);
+    final findStorage = FilesystemProfileStorage('$devicesDir/$callsign');
+    return AlertFolderUtils.findAlertPath('$devicesDir/$callsign/alerts', folderName, storage: findStorage);
   }
 
   /// Fetch photos from the connected client for an alert

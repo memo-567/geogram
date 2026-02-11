@@ -10,6 +10,7 @@
 import 'dart:io';
 
 import '../../models/video.dart';
+import '../../services/profile_storage.dart';
 import '../../util/video_parser.dart';
 import '../../util/video_folder_utils.dart';
 import '../../util/feedback_folder_utils.dart';
@@ -20,11 +21,13 @@ import '../../util/nostr_event.dart';
 class VideoHandler {
   final String dataDir;
   final String callsign;
+  final ProfileStorage storage;
   final void Function(String level, String message)? log;
 
   VideoHandler({
     required this.dataDir,
     required this.callsign,
+    required this.storage,
     this.log,
   });
 
@@ -170,15 +173,16 @@ class VideoHandler {
       }
 
       // Load feedback counts
-      final feedbackCounts = await FeedbackFolderUtils.getAllFeedbackCounts(videoFolderPath);
+      final feedbackCounts = await FeedbackFolderUtils.getAllFeedbackCounts(
+        videoFolderPath,
+        storage: storage,
+      );
 
       // Get comment count
-      int commentCount = 0;
-      final commentsPath = FeedbackFolderUtils.buildCommentsPath(videoFolderPath);
-      final commentsDir = Directory(commentsPath);
-      if (await commentsDir.exists()) {
-        commentCount = await commentsDir.list().where((e) => e is File).length;
-      }
+      final commentCount = await FeedbackCommentUtils.getCommentCount(
+        videoFolderPath,
+        storage: storage,
+      );
 
       // Get requester's feedback state if npub provided
       Map<String, bool> userFeedbackState = {};
@@ -186,6 +190,7 @@ class VideoHandler {
         userFeedbackState = await FeedbackFolderUtils.getUserFeedbackState(
           videoFolderPath,
           requesterNpub,
+          storage: storage,
         );
       }
 
@@ -310,20 +315,25 @@ class VideoHandler {
       }
 
       // Load feedback counts
-      final counts = await FeedbackFolderUtils.getAllFeedbackCounts(videoFolderPath);
+      final counts = await FeedbackFolderUtils.getAllFeedbackCounts(
+        videoFolderPath,
+        storage: storage,
+      );
 
       // Get comment count
-      int commentCount = 0;
-      final commentsPath = FeedbackFolderUtils.buildCommentsPath(videoFolderPath);
-      final commentsDir = Directory(commentsPath);
-      if (await commentsDir.exists()) {
-        commentCount = await commentsDir.list().where((e) => e is File).length;
-      }
+      final commentCount = await FeedbackCommentUtils.getCommentCount(
+        videoFolderPath,
+        storage: storage,
+      );
 
       // Get user state if npub provided
       Map<String, bool>? userState;
       if (npub != null) {
-        userState = await FeedbackFolderUtils.getUserFeedbackState(videoFolderPath, npub);
+        userState = await FeedbackFolderUtils.getUserFeedbackState(
+          videoFolderPath,
+          npub,
+          storage: storage,
+        );
       }
 
       return {
@@ -420,14 +430,21 @@ class VideoHandler {
       }
 
       // Record view
-      final success = await FeedbackFolderUtils.recordViewEvent(videoFolderPath, event);
+      final success = await FeedbackFolderUtils.recordViewEvent(
+        videoFolderPath,
+        event,
+        storage: storage,
+      );
 
       if (!success) {
         return {'error': 'Failed to record view', 'http_status': 500};
       }
 
       // Get updated count
-      final viewCount = await FeedbackFolderUtils.getViewCount(videoFolderPath);
+      final viewCount = await FeedbackFolderUtils.getViewCount(
+        videoFolderPath,
+        storage: storage,
+      );
 
       return {
         'success': true,
@@ -475,6 +492,7 @@ class VideoHandler {
         content: content.trim(),
         npub: npub,
         signature: signature,
+        storage: storage,
       );
 
       return {
@@ -511,7 +529,11 @@ class VideoHandler {
       }
 
       // Load comment to check ownership
-      final comment = await FeedbackCommentUtils.getComment(videoFolderPath, commentId);
+      final comment = await FeedbackCommentUtils.getComment(
+        videoFolderPath,
+        commentId,
+        storage: storage,
+      );
       if (comment == null) {
         return {'error': 'Comment not found', 'http_status': 404};
       }
@@ -523,7 +545,11 @@ class VideoHandler {
       }
 
       // Delete comment
-      final deleted = await FeedbackCommentUtils.deleteComment(videoFolderPath, commentId);
+      final deleted = await FeedbackCommentUtils.deleteComment(
+        videoFolderPath,
+        commentId,
+        storage: storage,
+      );
 
       if (!deleted) {
         return {'error': 'Failed to delete comment', 'http_status': 500};
@@ -560,7 +586,10 @@ class VideoHandler {
       }
 
       // Load comments
-      var comments = await FeedbackCommentUtils.loadComments(videoFolderPath);
+      var comments = await FeedbackCommentUtils.loadComments(
+        videoFolderPath,
+        storage: storage,
+      );
 
       // Sort newest first
       comments.sort((a, b) => b.created.compareTo(a.created));
@@ -803,6 +832,7 @@ class VideoHandler {
         videoFolderPath,
         feedbackType,
         event,
+        storage: storage,
       );
 
       if (result == null) {
@@ -810,7 +840,11 @@ class VideoHandler {
       }
 
       // Get updated count
-      final count = await FeedbackFolderUtils.getFeedbackCount(videoFolderPath, feedbackType);
+      final count = await FeedbackFolderUtils.getFeedbackCount(
+        videoFolderPath,
+        feedbackType,
+        storage: storage,
+      );
 
       return {
         'success': true,

@@ -6,10 +6,12 @@
 import 'package:flutter/material.dart';
 
 import '../models/event.dart';
+import '../services/app_service.dart';
 import '../services/event_feedback_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
+import '../services/profile_storage.dart';
 import '../util/feedback_comment_utils.dart';
 import '../util/feedback_folder_utils.dart';
 
@@ -74,9 +76,11 @@ class _EventLikeButtonState extends State<EventLikeButton> {
     }
 
     try {
+      final storage = AppService().profileStorage!;
       final npubs = await FeedbackFolderUtils.readFeedbackFile(
         contentPath,
         FeedbackFolderUtils.feedbackTypeLikes,
+        storage: storage,
       );
 
       final npub = _currentNpub;
@@ -131,24 +135,28 @@ class _EventLikeButtonState extends State<EventLikeButton> {
         }
       }
 
+      final storage = AppService().profileStorage!;
       bool? isActive = stationResult?.isActive;
       if (isActive == true) {
         await FeedbackFolderUtils.addFeedbackEvent(
           contentPath,
           FeedbackFolderUtils.feedbackTypeLikes,
           event,
+          storage: storage,
         );
       } else if (isActive == false) {
         await FeedbackFolderUtils.removeFeedbackEvent(
           contentPath,
           FeedbackFolderUtils.feedbackTypeLikes,
           event.npub,
+          storage: storage,
         );
       } else {
         isActive = await FeedbackFolderUtils.toggleFeedbackEvent(
           contentPath,
           FeedbackFolderUtils.feedbackTypeLikes,
           event,
+          storage: storage,
         );
       }
 
@@ -160,6 +168,7 @@ class _EventLikeButtonState extends State<EventLikeButton> {
       final localCount = await FeedbackFolderUtils.getFeedbackCount(
         contentPath,
         FeedbackFolderUtils.feedbackTypeLikes,
+        storage: storage,
       );
       final count = isPublic ? (stationResult?.count ?? localCount) : localCount;
 
@@ -292,7 +301,8 @@ class _EventFeedbackSectionState extends State<EventFeedbackSection> {
 
     setState(() => _isLoading = true);
     try {
-      var comments = await FeedbackCommentUtils.loadComments(contentPath);
+      final storage = AppService().profileStorage!;
+      var comments = await FeedbackCommentUtils.loadComments(contentPath, storage: storage);
       if (comments.isEmpty && widget.event.comments.isNotEmpty) {
         comments = widget.event.comments.map((comment) {
           return FeedbackComment(
@@ -342,6 +352,7 @@ class _EventFeedbackSectionState extends State<EventFeedbackSection> {
 
     setState(() => _isSubmitting = true);
     try {
+      final storage = AppService().profileStorage!;
       final signature = await _feedbackService.signComment(widget.event.id, content);
       await FeedbackCommentUtils.writeComment(
         contentPath: contentPath,
@@ -349,6 +360,7 @@ class _EventFeedbackSectionState extends State<EventFeedbackSection> {
         content: content,
         npub: profile.npub.isNotEmpty ? profile.npub : null,
         signature: signature,
+        storage: storage,
       );
 
       _commentController.clear();

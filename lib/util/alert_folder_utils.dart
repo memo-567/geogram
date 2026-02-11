@@ -1,6 +1,5 @@
-import 'dart:io';
-
 import '../util/feedback_folder_utils.dart';
+import '../services/profile_storage.dart';
 
 /// Centralized utilities for alert folder structure and naming conventions.
 ///
@@ -31,8 +30,6 @@ class AlertFolderUtils {
 
   /// Calculate region folder from coordinates.
   /// Rounds to 1 decimal place: `{roundedLat}_{roundedLon}`
-  ///
-  /// Example: `getRegionFolder(38.72, -9.14)` returns `38.7_-9.1`
   static String getRegionFolder(double lat, double lon) {
     final roundedLat = (lat * 10).round() / 10;
     final roundedLon = (lon * 10).round() / 10;
@@ -42,7 +39,6 @@ class AlertFolderUtils {
   /// Build the full path to an alert folder.
   ///
   /// Returns: `{baseDir}/{callsign}/alerts/{status}/{regionFolder}/{folderName}`
-  /// where status is 'active' or 'expired'.
   static String buildAlertPath({
     required String baseDir,
     required String callsign,
@@ -55,8 +51,6 @@ class AlertFolderUtils {
   }
 
   /// Build alert path from coordinates.
-  ///
-  /// Convenience method that calculates regionFolder from lat/lon.
   static String buildAlertPathFromCoords({
     required String baseDir,
     required String callsign,
@@ -107,38 +101,49 @@ class AlertFolderUtils {
   }
 
   /// Read points from feedback/points.txt.
-  /// Returns list of verified npub strings, empty list if file doesn't exist.
-  static Future<List<String>> readPointsFile(String alertPath) async {
+  static Future<List<String>> readPointsFile(
+    String alertPath, {
+    required ProfileStorage storage,
+  }) async {
     return FeedbackFolderUtils.readFeedbackFile(
       alertPath,
       FeedbackFolderUtils.feedbackTypePoints,
+      storage: storage,
     );
   }
 
   /// Read verifications from feedback/verifications.txt.
-  static Future<List<String>> readVerificationsFile(String alertPath) async {
+  static Future<List<String>> readVerificationsFile(
+    String alertPath, {
+    required ProfileStorage storage,
+  }) async {
     return FeedbackFolderUtils.readFeedbackFile(
       alertPath,
       FeedbackFolderUtils.feedbackTypeVerifications,
+      storage: storage,
     );
   }
 
   /// Get the point count for an alert from feedback/points.txt.
-  static Future<int> getPointCount(String alertPath) async {
-    final points = await readPointsFile(alertPath);
+  static Future<int> getPointCount(
+    String alertPath, {
+    required ProfileStorage storage,
+  }) async {
+    final points = await readPointsFile(alertPath, storage: storage);
     return points.length;
   }
 
   /// Check if a user has pointed an alert.
-  static Future<bool> hasPointedAlert(String alertPath, String npub) async {
-    final points = await readPointsFile(alertPath);
+  static Future<bool> hasPointedAlert(
+    String alertPath,
+    String npub, {
+    required ProfileStorage storage,
+  }) async {
+    final points = await readPointsFile(alertPath, storage: storage);
     return points.contains(npub);
   }
 
   /// Generate a comment filename in the format: `YYYY-MM-DD_HH-MM-SS_AUTHOR.txt`
-  ///
-  /// Example: `generateCommentFilename(DateTime.now(), 'X1ABC2')` returns
-  /// `2025-12-14_22-15-23_X1ABC2.txt`
   static String generateCommentFilename(DateTime timestamp, String author) {
     return '${timestamp.year}-${timestamp.month.toString().padLeft(2, '0')}-${timestamp.day.toString().padLeft(2, '0')}_'
         '${timestamp.hour.toString().padLeft(2, '0')}-${timestamp.minute.toString().padLeft(2, '0')}-${timestamp.second.toString().padLeft(2, '0')}_$author.txt';
@@ -151,21 +156,21 @@ class AlertFolderUtils {
   }
 
   /// Generate the next sequential photo filename.
-  ///
-  /// Scans the images folder and returns `photo{N}.{ext}` where N is the next number.
-  static Future<String> getNextPhotoFilename(String alertPath, String extension) async {
-    final imagesDir = Directory(buildImagesPath(alertPath));
+  static Future<String> getNextPhotoFilename(
+    String alertPath,
+    String extension, {
+    required ProfileStorage storage,
+  }) async {
+    final imagesPath = buildImagesPath(alertPath);
     int maxNum = 0;
 
-    if (await imagesDir.exists()) {
-      await for (final entity in imagesDir.list()) {
-        if (entity is File) {
-          final filename = entity.path.split('/').last;
-          final match = RegExp(r'^photo(\d+)\.').firstMatch(filename);
-          if (match != null) {
-            final num = int.tryParse(match.group(1)!) ?? 0;
-            if (num > maxNum) maxNum = num;
-          }
+    final entries = await storage.listDirectory(imagesPath);
+    for (final entry in entries) {
+      if (!entry.isDirectory) {
+        final match = RegExp(r'^photo(\d+)\.').firstMatch(entry.name);
+        if (match != null) {
+          final num = int.tryParse(match.group(1)!) ?? 0;
+          if (num > maxNum) maxNum = num;
         }
       }
     }
@@ -177,49 +182,46 @@ class AlertFolderUtils {
   /// Find an alert folder by searching recursively.
   ///
   /// Searches under `alertsDir` for a folder matching `folderName` that contains
-  /// a report.txt file. Returns the full path if found, null otherwise.
-  ///
-  /// This handles the `active/{region}/` folder structure and provides
-  /// backwards compatibility with older flat structures.
-  static Future<String?> findAlertPath(String alertsDir, String folderName) async {
-    final dir = Directory(alertsDir);
-    if (!await dir.exists()) return null;
+  /// a report.txt file. Returns the relative path if found, null otherwise.
+  static Future<String?> findAlertPath(
+    String alertsDir,
+    String folderName, {
+    required ProfileStorage storage,
+  }) async {
+    final entries = await storage.listDirectory(alertsDir, recursive: true);
 
     // Search recursively for the alert folder
-    await for (final entity in dir.list(recursive: true)) {
-      if (entity is Directory && entity.path.endsWith('/$folderName')) {
-        final reportFile = File('${entity.path}/report.txt');
-        if (await reportFile.exists()) {
-          return entity.path;
+    for (final entry in entries) {
+      if (entry.isDirectory && entry.name == folderName) {
+        final reportPath = '${entry.path}/report.txt';
+        if (await storage.exists(reportPath)) {
+          return entry.path;
         }
       }
     }
 
     // Also check direct path for backwards compatibility
     final directPath = '$alertsDir/$folderName';
-    final directDir = Directory(directPath);
-    if (await directDir.exists()) {
-      final reportFile = File('$directPath/report.txt');
-      if (await reportFile.exists()) {
-        return directPath;
-      }
+    final directReportPath = '$directPath/report.txt';
+    if (await storage.exists(directReportPath)) {
+      return directPath;
     }
 
     return null;
   }
 
   /// Find all alert folders recursively and return their paths.
-  ///
-  /// Returns a list of paths to alert folders (directories containing report.txt).
-  static Future<List<String>> findAllAlertPaths(String alertsDir) async {
+  static Future<List<String>> findAllAlertPaths(
+    String alertsDir, {
+    required ProfileStorage storage,
+  }) async {
     final paths = <String>[];
-    final dir = Directory(alertsDir);
-    if (!await dir.exists()) return paths;
+    final entries = await storage.listDirectory(alertsDir, recursive: true);
 
-    await for (final entity in dir.list(recursive: true)) {
-      if (entity is File && entity.path.endsWith('/report.txt')) {
+    for (final entry in entries) {
+      if (!entry.isDirectory && entry.name == 'report.txt') {
         // Extract the alert directory path
-        final alertPath = entity.path.replaceFirst('/report.txt', '');
+        final alertPath = entry.path.replaceFirst('/report.txt', '').replaceFirst('\\report.txt', '');
         paths.add(alertPath);
       }
     }
@@ -228,8 +230,6 @@ class AlertFolderUtils {
   }
 
   /// Extract region folder from an alert's content by parsing COORDINATES field.
-  ///
-  /// Returns the region folder string like `38.7_-9.1`, or `0.0_0.0` if not found.
   static String extractRegionFromContent(String content) {
     final coordsRegex = RegExp(r'^COORDINATES:\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)', multiLine: true);
     final match = coordsRegex.firstMatch(content);
@@ -242,8 +242,6 @@ class AlertFolderUtils {
   }
 
   /// Validate that a filename follows the comment format.
-  ///
-  /// Expected format: `YYYY-MM-DD_HH-MM-SS_XXXXXX.txt`
   static bool isValidCommentFilename(String filename) {
     return RegExp(r'^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_[A-Za-z0-9]+\.txt$').hasMatch(filename);
   }
@@ -260,8 +258,6 @@ class AlertFolderUtils {
   }
 
   /// Generate folder name from title and timestamp.
-  ///
-  /// Format: `YYYY-MM-DD_HH-MM_sanitized-title`
   static String generateFolderName(DateTime timestamp, String title, {int maxTitleLength = 100}) {
     final sanitized = sanitizeForFolderName(title, maxLength: maxTitleLength);
     return '${timestamp.year}-${timestamp.month.toString().padLeft(2, '0')}-${timestamp.day.toString().padLeft(2, '0')}_'
@@ -269,10 +265,7 @@ class AlertFolderUtils {
   }
 
   /// Sanitize a string for use in folder names.
-  ///
-  /// Removes special characters and limits length.
   static String sanitizeForFolderName(String input, {int maxLength = 100}) {
-    // Truncate first, then sanitize
     var truncated = input.length > maxLength ? input.substring(0, maxLength) : input;
 
     return truncated

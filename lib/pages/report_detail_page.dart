@@ -26,7 +26,9 @@ import '../services/i18n_service.dart';
 import '../services/alert_feedback_service.dart';
 import '../services/station_service.dart';
 import '../services/station_alert_service.dart';
+import '../services/app_service.dart';
 import '../services/alert_sharing_service.dart';
+import '../services/profile_storage.dart';
 import '../util/alert_folder_utils.dart';
 import '../util/feedback_comment_utils.dart';
 import '../util/feedback_folder_utils.dart';
@@ -71,6 +73,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     final existing = await AlertFolderUtils.findAlertPath(
       widget.appPath,
       _report!.folderName,
+      storage: AppService().profileStorage!,
     );
     return existing ?? path.join(widget.appPath, _report!.folderName);
   }
@@ -122,6 +125,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
       final alertPath = await _resolveStationAlertPath();
       if (alertPath == null) return null;
 
+      final storage = AppService().profileStorage!;
       final signature = await _alertFeedbackService.signComment(_report!.apiId, content);
       await FeedbackCommentUtils.writeComment(
         contentPath: alertPath,
@@ -129,6 +133,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
         content: content,
         npub: npub,
         signature: signature,
+        storage: storage,
       );
 
       LogService().log('ReportDetailPage: Saved comment for station alert ${_report!.folderName}');
@@ -310,7 +315,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
       // Also reload points for the report
       final alertPath = await _resolveStationAlertPath();
       if (alertPath != null) {
-        final points = await AlertFolderUtils.readPointsFile(alertPath);
+        final points = await AlertFolderUtils.readPointsFile(alertPath, storage: AppService().profileStorage!);
         if (mounted) {
           setState(() {
             _report = _report!.copyWith(
@@ -335,7 +340,8 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
       final alertPath = await _resolveStationAlertPath();
       if (alertPath == null) return comments;
 
-      final feedbackComments = await FeedbackCommentUtils.loadComments(alertPath);
+      final storage = AppService().profileStorage!;
+      final feedbackComments = await FeedbackCommentUtils.loadComments(alertPath, storage: storage);
       comments.addAll(feedbackComments.map((comment) {
         return ReportComment(
           id: comment.id,
@@ -438,6 +444,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
           throw Exception('Unable to resolve alert path');
         }
 
+        final storage = AppService().profileStorage!;
         final event = await _alertFeedbackService.buildReactionEvent(
           alertId,
           wasPointed ? 'unpoint' : 'point',
@@ -450,6 +457,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
           alertPath,
           FeedbackFolderUtils.feedbackTypePoints,
           event,
+          storage: storage,
         );
         if (isNowActive == null) {
           throw Exception('Failed to apply point feedback');
@@ -905,7 +913,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
       for (final imagePath in _imageFilePaths) {
         final imageFile = File(imagePath);
         final ext = path.extension(imagePath).toLowerCase();
-        final sequentialName = await AlertFolderUtils.getNextPhotoFilename(alertPath, ext);
+        final sequentialName = await AlertFolderUtils.getNextPhotoFilename(alertPath, ext, storage: AppService().profileStorage!);
         final destPath = path.join(imagesDir.path, sequentialName);
         await imageFile.copy(destPath);
       }

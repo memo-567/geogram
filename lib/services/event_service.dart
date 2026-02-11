@@ -143,8 +143,9 @@ class EventService {
         final feedbackLikes = await FeedbackFolderUtils.readFeedbackFile(
           eventDirPath,
           FeedbackFolderUtils.feedbackTypeLikes,
+          storage: _storage,
         );
-        final feedbackComments = await FeedbackCommentUtils.loadComments(eventDirPath);
+        final feedbackComments = await FeedbackCommentUtils.loadComments(eventDirPath, storage: _storage);
 
         eventLikes = feedbackLikes;
         eventComments = feedbackComments.map((comment) {
