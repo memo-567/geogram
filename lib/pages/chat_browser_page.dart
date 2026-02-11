@@ -106,6 +106,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   bool _stationReachable = false; // Track if station is currently reachable (default false until confirmed)
   bool _forcedOfflineMode = false; // True when viewing a device explicitly marked as offline
   bool _isStationSending = false; // Sending message to station room
+  String? _syncProgressText; // "Loading Jan 15..." shown during progressive sync
   bool _isStationRecording = false; // Recording voice for station room
   final Set<String> _recentlyUploadedFiles = {}; // Track files we just uploaded to skip re-downloading
 
@@ -321,13 +322,25 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
   }
 
-  /// Refresh station messages without showing loading indicator
+  /// Refresh station messages without showing loading indicator.
+  /// Uses progressive sync on first load (empty cache), regular sync for incremental updates.
   Future<void> _refreshRelayMessages() async {
     // Prevent overlapping refreshes
     if (_isRefreshingMessages) return;
     _isRefreshingMessages = true;
     try {
-      await _syncStationMessages();
+      final roomId = _selectedStationRoom?.id;
+      final hasCached = roomId != null &&
+          _stationMessageCache.containsKey(roomId) &&
+          (_stationMessageCache[roomId]?.isNotEmpty ?? false);
+
+      if (hasCached) {
+        // Incremental update - fast, existing logic
+        await _syncStationMessages();
+      } else {
+        // First load - use progressive day-by-day download
+        await _progressiveSyncStationMessages();
+      }
     } finally {
       _isRefreshingMessages = false;
     }
@@ -1104,6 +1117,104 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       LogService().log('Error downloading chat files: $e');
       return false;
     }
+  }
+
+  /// Progressive sync: download chat files newest-first, updating UI after each file.
+  /// Shows today's messages within seconds, then loads older days in the background.
+  Future<void> _progressiveSyncStationMessages() async {
+    if (_selectedStationRoom == null) return;
+    final cacheKey = _lastRelayCacheKey ?? '';
+    if (cacheKey.isEmpty) return;
+    final stationUrl = _selectedStationRoom!.stationUrl;
+    final roomId = _selectedStationRoom!.id;
+
+    try {
+      // 1. Fetch the file listing (fast, single small JSON response)
+      _setStateIfMounted(() {
+        _syncProgressText = 'Loading messages...';
+      });
+
+      final files = await _stationService.fetchRoomChatFiles(stationUrl, roomId);
+      if (files.isEmpty) {
+        // Genuinely no messages - clear loading state
+        _setStateIfMounted(() {
+          _isLoading = false;
+          _syncProgressText = null;
+        });
+        return;
+      }
+
+      // 2. Sort newest-first by filename (YYYY-MM-DD_chat.txt sorts correctly)
+      files.sort((a, b) =>
+        (b['filename'] as String).compareTo(a['filename'] as String));
+
+      // 3. Download each file newest-first, updating UI after each
+      int downloadedCount = 0;
+      for (final fileInfo in files) {
+        final year = fileInfo['year'] as String;
+        final filename = fileInfo['filename'] as String;
+        final expectedSize = fileInfo['size'] as int?;
+
+        // Check if already cached with matching size
+        final isCached = await _cacheService.hasCachedChatFile(
+          cacheKey, roomId, year, filename, expectedSize: expectedSize,
+        );
+
+        if (!isCached) {
+          // Update progress text for this file
+          _setStateIfMounted(() {
+            _syncProgressText = 'Loading ${_formatDateFromFilename(filename)}...';
+          });
+
+          final content = await _stationService.fetchRoomChatFile(
+            stationUrl, roomId, year, filename,
+          );
+
+          if (content != null && content.isNotEmpty) {
+            await _cacheService.saveRawChatFile(
+              cacheKey, roomId, year, filename, content,
+            );
+            downloadedCount++;
+
+            // Reload from cache and update UI after each file
+            if (mounted && _selectedStationRoom?.id == roomId) {
+              await _loadMessagesFromCache(roomId, limit: _stationMessageLimit);
+            }
+          }
+        } else if (downloadedCount == 0) {
+          // First file was cached - make sure UI shows it
+          if (mounted && _selectedStationRoom?.id == roomId && _stationMessages.isEmpty) {
+            await _loadMessagesFromCache(roomId, limit: _stationMessageLimit);
+          }
+        }
+      }
+
+      // 4. Quick incremental fetch for messages posted today that aren't in the daily file yet
+      if (mounted && _selectedStationRoom?.id == roomId) {
+        await _syncStationMessages();
+      }
+    } catch (e) {
+      LogService().log('Error in progressive sync: $e');
+    } finally {
+      _setStateIfMounted(() {
+        _syncProgressText = null;
+        _isLoading = false;
+      });
+    }
+  }
+
+  /// Format a chat filename like "2025-11-29_chat.txt" into "Nov 29, 2025"
+  static const _monthNames = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+
+  String _formatDateFromFilename(String filename) {
+    // Extract date portion: "2025-11-29_chat.txt" -> "2025-11-29"
+    final dateStr = filename.length >= 10 ? filename.substring(0, 10) : filename;
+    final parsed = DateTime.tryParse(dateStr);
+    if (parsed == null) return dateStr;
+    return '${_monthNames[parsed.month - 1]} ${parsed.day}, ${parsed.year}';
   }
 
   /// Convert station messages to ChatMessage format for display
@@ -2707,6 +2818,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             messages: _convertStationMessages(_stationMessages),
             isGroupChat: true,
             isLoading: _isLoading,
+            loadingText: _syncProgressText,
             onLoadMore: _loadMoreStationMessages,
             onMessageDelete: _deleteStationMessage,
             canDeleteMessage: _canDeleteStationMessage,

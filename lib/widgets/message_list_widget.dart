@@ -16,6 +16,8 @@ class MessageListWidget extends StatefulWidget {
   final bool isGroupChat;
   final VoidCallback? onLoadMore;
   final bool isLoading;
+  /// Loading progress text (e.g., "Loading messages..." or "Loading Jan 15...")
+  final String? loadingText;
   final Function(ChatMessage)? onFileOpen;
   final Function(ChatMessage)? onMessageDelete;
   final bool Function(ChatMessage)? canDeleteMessage;
@@ -54,6 +56,7 @@ class MessageListWidget extends StatefulWidget {
     this.isGroupChat = true,
     this.onLoadMore,
     this.isLoading = false,
+    this.loadingText,
     this.onFileOpen,
     this.onMessageDelete,
     this.canDeleteMessage,
@@ -251,6 +254,30 @@ class _MessageListWidgetState extends State<MessageListWidget> {
 
   /// Build empty state widget
   Widget _buildEmptyState(ThemeData theme) {
+    if (widget.isLoading) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 32,
+              height: 32,
+              child: CircularProgressIndicator(
+                strokeWidth: 3,
+                color: theme.colorScheme.primary,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              widget.loadingText ?? 'Loading messages...',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
