@@ -23,4 +23,9 @@ plugins {
     id("org.jetbrains.kotlin.android") version "2.2.20" apply false
 }
 
+// Allow launch script to force offline mode via environment variable
+if (System.getenv("GRADLE_OFFLINE") == "true") {
+    gradle.startParameter.isOffline = true
+}
+
 include(":app")

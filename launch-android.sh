@@ -33,9 +33,53 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Change to the geogram directory
 cd "$SCRIPT_DIR"
 
+GRADLEW="$SCRIPT_DIR/android/gradlew"
+
 echo "Launching Geogram on Android..."
 echo "Working directory: $SCRIPT_DIR"
 
+# ── Gradle daemon management ─────────────────────────────────────────
+# Stop ALL running Gradle daemons so we don't accumulate 2GB processes.
+# The build will start a single fresh daemon that gets reused on next run.
+echo ""
+echo "Managing Gradle daemons..."
+DAEMON_COUNT=$(pgrep -f 'GradleDaemon' | wc -l)
+if [ "$DAEMON_COUNT" -gt 1 ]; then
+    echo "Found $DAEMON_COUNT Gradle daemons running — stopping extras..."
+    "$GRADLEW" --stop 2>/dev/null || true
+    sleep 1
+elif [ "$DAEMON_COUNT" -eq 1 ]; then
+    echo "Reusing existing Gradle daemon (PID $(pgrep -f 'GradleDaemon' | head -1))"
+else
+    echo "No Gradle daemon running — one will start with the build"
+fi
+
+# ── Clean up OOM heap dumps ──────────────────────────────────────────
+HPROF_FILES=("$SCRIPT_DIR/android/"java_pid*.hprof)
+if [ -f "${HPROF_FILES[0]}" ]; then
+    HPROF_SIZE=$(du -sh "$SCRIPT_DIR/android/"java_pid*.hprof 2>/dev/null | tail -1 | awk '{print $1}')
+    echo "Cleaning up old heap dump files (${HPROF_SIZE})..."
+    rm -f "$SCRIPT_DIR/android/"java_pid*.hprof
+fi
+
+# ── Offline mode ─────────────────────────────────────────────────────
+# Avoid downloading dependencies on every build. If Gradle caches exist,
+# build in offline mode. Pass --online flag to force online resolution.
+if [ "${1:-}" = "--online" ]; then
+    echo "Online mode forced — will resolve dependencies from network"
+    export GRADLE_OFFLINE="false"
+    shift
+else
+    if [ -d "$HOME/.gradle/caches/modules-2/files-2.1" ]; then
+        echo "Gradle dependency cache found — building OFFLINE (use --online to override)"
+        export GRADLE_OFFLINE="true"
+    else
+        echo "No Gradle cache found — must download dependencies (first build)"
+        export GRADLE_OFFLINE="false"
+    fi
+fi
+
+# ── ADB setup ────────────────────────────────────────────────────────
 # Restart ADB server to ensure clean state (prevents memory/hang issues)
 echo ""
 echo "Restarting ADB server..."
@@ -100,17 +144,25 @@ echo ""
 echo "Flutter version:"
 "$FLUTTER_BIN" --version
 
-# Get dependencies - try offline first, fall back to online
+# ── Dependencies ─────────────────────────────────────────────────────
+# Try offline first to avoid network access; fall back to online only if needed
 echo ""
 echo "Checking dependencies..."
 if ! "$FLUTTER_BIN" pub get --offline 2>/dev/null; then
-    echo "Fetching dependencies online..."
+    echo "Offline pub get failed — fetching dependencies online..."
     "$FLUTTER_BIN" pub get
 fi
 
+# ── Build ────────────────────────────────────────────────────────────
 # Build the APK once (debug build to enable run-as for android-sync.sh)
+# --no-pub: skip pub get (already done above)
+# GRADLE_OFFLINE env var is read by settings.gradle.kts to set offline mode
 echo ""
-echo "Building APK..."
+if [ "$GRADLE_OFFLINE" = "true" ]; then
+    echo "Building APK (offline — no dependency downloads)..."
+else
+    echo "Building APK..."
+fi
 "$FLUTTER_BIN" build apk --debug --no-pub
 
 APK_PATH="$SCRIPT_DIR/build/app/outputs/flutter-apk/app-debug.apk"
