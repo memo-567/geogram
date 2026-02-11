@@ -5,6 +5,8 @@
 
 import 'dart:io';
 
+import 'package:path/path.dart' as p;
+
 import 'music_track.dart';
 import 'music_album.dart';
 import 'music_artist.dart';
@@ -272,7 +274,7 @@ class MusicLibrary {
     final dir = Directory(folderPath);
     if (!dir.existsSync()) return null;
 
-    final name = folderPath.split('/').last;
+    final name = p.basename(folderPath);
 
     // Find albums directly in this folder
     final directAlbums = albumsByFolder[folderPath] ?? [];
@@ -284,11 +286,11 @@ class MusicLibrary {
 
     // Find all folder paths that are direct children of this folder
     for (final albumFolder in albumsByFolder.keys) {
-      if (albumFolder != folderPath && albumFolder.startsWith('$folderPath/')) {
+      if (albumFolder != folderPath && p.isWithin(folderPath, albumFolder)) {
         // Get the immediate child folder
-        final remaining = albumFolder.substring(folderPath.length + 1);
-        final childName = remaining.split('/').first;
-        final childPath = '$folderPath/$childName';
+        final relative = p.relative(albumFolder, from: folderPath);
+        final childName = p.split(relative).first;
+        final childPath = p.join(folderPath, childName);
 
         // Skip if this child is itself a source folder (handled separately)
         if (!sourceFolders.contains(childPath)) {
@@ -322,12 +324,12 @@ class MusicLibrary {
     // Find artwork: first check folder artwork, then use first album's artwork
     String? artwork;
     final artworkFiles = [
-      '$folderPath/cover.jpg',
-      '$folderPath/cover.png',
-      '$folderPath/artwork.jpg',
-      '$folderPath/artwork.png',
-      '$folderPath/folder.jpg',
-      '$folderPath/folder.png',
+      p.join(folderPath, 'cover.jpg'),
+      p.join(folderPath, 'cover.png'),
+      p.join(folderPath, 'artwork.jpg'),
+      p.join(folderPath, 'artwork.png'),
+      p.join(folderPath, 'folder.jpg'),
+      p.join(folderPath, 'folder.png'),
     ];
     for (final artworkPath in artworkFiles) {
       if (File(artworkPath).existsSync()) {
@@ -360,7 +362,7 @@ class MusicLibrary {
     final result = <MusicTrack>[];
     for (final album in albums) {
       if (album.folderPath == folderPath ||
-          album.folderPath.startsWith('$folderPath/')) {
+          p.isWithin(folderPath, album.folderPath)) {
         result.addAll(getAlbumTracks(album.id));
       }
     }
@@ -377,24 +379,24 @@ class MusicLibrary {
     final childFolders = <String>{};
     for (final album in albums) {
       if (album.folderPath != folderPath &&
-          album.folderPath.startsWith('$folderPath/')) {
+          p.isWithin(folderPath, album.folderPath)) {
         // Get the immediate child folder name
-        final remaining = album.folderPath.substring(folderPath.length + 1);
-        final childName = remaining.split('/').first;
-        childFolders.add('$folderPath/$childName');
+        final relative = p.relative(album.folderPath, from: folderPath);
+        final childName = p.split(relative).first;
+        childFolders.add(p.join(folderPath, childName));
       }
     }
 
     // Build folder nodes for immediate children only
     final subfolderNodes = <MusicFolderNode>[];
     for (final childPath in childFolders) {
-      final name = childPath.split('/').last;
+      final name = p.basename(childPath);
 
       // Count tracks in this subfolder and its descendants
       var trackCount = 0;
       for (final album in albums) {
         if (album.folderPath == childPath ||
-            album.folderPath.startsWith('$childPath/')) {
+            p.isWithin(childPath, album.folderPath)) {
           trackCount += album.trackCount;
         }
       }
@@ -405,7 +407,7 @@ class MusicLibrary {
         // Use first album's artwork from this folder or subfolders
         for (final album in albums) {
           if (album.folderPath == childPath ||
-              album.folderPath.startsWith('$childPath/')) {
+              p.isWithin(childPath, album.folderPath)) {
             if (album.artwork != null) {
               artwork = album.artwork;
               break;
@@ -443,7 +445,7 @@ class MusicLibrary {
       'folder.png',
     ];
     for (final filename in artworkFiles) {
-      final file = File('$folderPath/$filename');
+      final file = File(p.join(folderPath, filename));
       if (file.existsSync()) {
         return file.path;
       }

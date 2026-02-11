@@ -6,6 +6,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 
 import '../models/music_models.dart';
 import '../services/music_playback_service.dart';
@@ -68,14 +69,14 @@ class _FolderBrowserWidgetState extends State<FolderBrowserWidget> {
       // Check if this source folder has any music
       final hasMusic = widget.library.albums.any((a) =>
           a.folderPath == sourceFolder ||
-          a.folderPath.startsWith('$sourceFolder/'));
+          p.isWithin(sourceFolder, a.folderPath));
 
       if (hasMusic) {
         // Count tracks in this source folder
         var trackCount = 0;
         for (final album in widget.library.albums) {
           if (album.folderPath == sourceFolder ||
-              album.folderPath.startsWith('$sourceFolder/')) {
+              p.isWithin(sourceFolder, album.folderPath)) {
             trackCount += album.trackCount;
           }
         }
@@ -86,7 +87,7 @@ class _FolderBrowserWidgetState extends State<FolderBrowserWidget> {
           // Use first album's artwork
           for (final album in widget.library.albums) {
             if (album.folderPath == sourceFolder ||
-                album.folderPath.startsWith('$sourceFolder/')) {
+                p.isWithin(sourceFolder, album.folderPath)) {
               if (album.artwork != null) {
                 artwork = album.artwork;
                 break;
@@ -97,7 +98,7 @@ class _FolderBrowserWidgetState extends State<FolderBrowserWidget> {
 
         nodes.add(MusicFolderNode(
           path: sourceFolder,
-          name: sourceFolder.split('/').last,
+          name: p.basename(sourceFolder),
           totalTrackCount: trackCount,
           artwork: artwork,
         ));
@@ -116,7 +117,7 @@ class _FolderBrowserWidgetState extends State<FolderBrowserWidget> {
       'folder.png',
     ];
     for (final filename in artworkFiles) {
-      final file = File('$folderPath/$filename');
+      final file = File(p.join(folderPath, filename));
       if (file.existsSync()) {
         return file.path;
       }
@@ -232,7 +233,7 @@ class _FolderBrowserWidgetState extends State<FolderBrowserWidget> {
 
   Widget _buildNavigationBar(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final folderName = _currentFolderPath!.split('/').last;
+    final folderName = p.basename(_currentFolderPath!);
 
     // Calculate track count for current folder
     final trackCount = widget.library.getTracksInFolder(_currentFolderPath!).length;
