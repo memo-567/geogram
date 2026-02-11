@@ -123,6 +123,8 @@ class StationTransport extends Transport with TransportMixin {
           return await _handleApiRequest(message, station.url, effectiveTimeout, stopwatch);
 
         case TransportMessageType.directMessage:
+          return await _handleDMViaProxy(message, station.url, effectiveTimeout, stopwatch);
+
         case TransportMessageType.chatMessage:
           return await _handleMessageRelay(message, effectiveTimeout, stopwatch);
 
@@ -218,7 +220,94 @@ class StationTransport extends Transport with TransportMixin {
     return result;
   }
 
-  /// Handle DM and chat message relay via WebSocket
+  /// Handle DM delivery via station HTTP proxy
+  Future<TransportResult> _handleDMViaProxy(
+    TransportMessage message,
+    String stationUrl,
+    Duration timeout,
+    Stopwatch stopwatch,
+  ) async {
+    if (message.signedEvent == null) {
+      return TransportResult.failure(
+        error: 'No signed event for DM delivery',
+        transportUsed: id,
+      );
+    }
+
+    final senderCallsign = _extractSenderCallsign(message.signedEvent);
+    if (senderCallsign == null) {
+      return TransportResult.failure(
+        error: 'Cannot extract sender callsign from signed event',
+        transportUsed: id,
+      );
+    }
+
+    final httpUrl = _getStationHttpUrl(stationUrl);
+    final targetCallsign = message.targetCallsign.toUpperCase();
+
+    // Use station HTTP proxy: /{targetCallsign}/api/chat/{senderCallsign}/messages
+    final path = '/api/chat/$senderCallsign/messages';
+    final uri = Uri.parse('$httpUrl/$targetCallsign$path');
+    final body = jsonEncode({'event': message.signedEvent});
+
+    LogService().log('StationTransport: POST $path to $targetCallsign via station proxy');
+
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: body,
+    ).timeout(timeout);
+
+    stopwatch.stop();
+
+    // 5xx = transport/station failure, try next transport
+    if (response.statusCode >= 500) {
+      final result = TransportResult.failure(
+        error: 'Station proxy error: HTTP ${response.statusCode}',
+        statusCode: response.statusCode,
+        transportUsed: id,
+      );
+      recordMetrics(result);
+      return result;
+    }
+
+    // 4xx = client error (device rejected), still counts as "delivered to device"
+    // 2xx = success
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final result = TransportResult.failure(
+        error: 'HTTP ${response.statusCode}: ${response.body}',
+        statusCode: response.statusCode,
+        transportUsed: id,
+      );
+      recordMetrics(result);
+      return result;
+    }
+
+    final result = TransportResult.success(
+      statusCode: response.statusCode,
+      responseData: response.body,
+      transportUsed: id,
+      latency: stopwatch.elapsed,
+    );
+
+    recordMetrics(result);
+    return result;
+  }
+
+  /// Extract sender callsign from signed event tags
+  String? _extractSenderCallsign(Map<String, dynamic>? signedEvent) {
+    if (signedEvent == null) return null;
+    final tags = signedEvent['tags'] as List<dynamic>?;
+    if (tags == null) return null;
+    for (final tag in tags) {
+      if (tag is List && tag.length >= 2 && tag[0] == 'callsign') {
+        return (tag[1] as String).toUpperCase();
+      }
+    }
+    return null;
+  }
+
+  /// Handle chat message relay via WebSocket
   Future<TransportResult> _handleMessageRelay(
     TransportMessage message,
     Duration timeout,

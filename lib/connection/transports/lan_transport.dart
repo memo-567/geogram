@@ -9,7 +9,6 @@ import '../../services/log_service.dart';
 import '../../services/app_args.dart';
 import '../../services/security_service.dart';
 import '../../api/endpoints/chat_api.dart';
-import '../../api/endpoints/dm_api.dart';
 import '../transport.dart';
 import '../transport_message.dart';
 
@@ -212,8 +211,17 @@ class LanTransport extends Transport with TransportMixin {
     // DMs and chat messages are posted to the device's chat API
     String path;
     if (message.type == TransportMessageType.directMessage) {
-      // POST to /api/dm/{callsign}/messages
-      path = DmApi.messagesPath(message.targetCallsign);
+      // DM path: extract sender from signed event, POST to chat API
+      // The receiving device's endpoint is /api/chat/{senderCallsign}/messages
+      final senderCallsign = _extractSenderCallsign(message.signedEvent);
+      if (senderCallsign == null) {
+        stopwatch.stop();
+        return TransportResult.failure(
+          error: 'Cannot extract sender callsign from signed event',
+          transportUsed: id,
+        );
+      }
+      path = '/api/chat/$senderCallsign/messages';
     } else {
       // Chat messages use the room path
       path = ChatApi.messagesPath(message.path ?? 'general');
@@ -222,7 +230,7 @@ class LanTransport extends Transport with TransportMixin {
     // For LAN transport, send directly to device - no callsign prefix needed
     final uri = Uri.parse('$baseUrl$path');
     final body = message.signedEvent != null
-        ? jsonEncode(message.signedEvent)
+        ? jsonEncode({'event': message.signedEvent})
         : jsonEncode(message.payload);
 
     LogService().log('LanTransport: POST $path to ${message.targetCallsign}');
@@ -235,6 +243,16 @@ class LanTransport extends Transport with TransportMixin {
 
     stopwatch.stop();
 
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final result = TransportResult.failure(
+        error: 'HTTP ${response.statusCode}: ${response.body}',
+        statusCode: response.statusCode,
+        transportUsed: id,
+      );
+      recordMetrics(result);
+      return result;
+    }
+
     final result = TransportResult.success(
       statusCode: response.statusCode,
       responseData: response.body,
@@ -244,6 +262,19 @@ class LanTransport extends Transport with TransportMixin {
 
     recordMetrics(result);
     return result;
+  }
+
+  /// Extract sender callsign from signed event tags
+  String? _extractSenderCallsign(Map<String, dynamic>? signedEvent) {
+    if (signedEvent == null) return null;
+    final tags = signedEvent['tags'] as List<dynamic>?;
+    if (tags == null) return null;
+    for (final tag in tags) {
+      if (tag is List && tag.length >= 2 && tag[0] == 'callsign') {
+        return (tag[1] as String).toUpperCase();
+      }
+    }
+    return null;
   }
 
   /// Handle sync requests
