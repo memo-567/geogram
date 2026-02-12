@@ -44,4 +44,5 @@ else
 fi
 
 echo ""
-echo "Done! Launch Geogram from your app menu or run: geogram"
+echo "Done! Launching Geogram..."
+nohup "$INSTALL_DIR/geogram" >/dev/null 2>&1 &
