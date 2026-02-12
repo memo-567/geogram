@@ -429,17 +429,6 @@ class CliStationServer extends StationServerBase
         }
         return null;
       },
-      getClientNpub: (callsign) {
-        // Check connected clients first
-        for (final client in clients.values) {
-          if (client.callsign?.toUpperCase() == callsign.toUpperCase() && client.npub != null) {
-            return client.npub;
-          }
-        }
-        // Fall back to NIP-05 registry
-        final registration = Nip05RegistryService().getRegistration(callsign);
-        return registration?.npub;
-      },
       getStationDomain: () => settings.sslDomain ?? settings.callsign.toLowerCase(),
     );
   }

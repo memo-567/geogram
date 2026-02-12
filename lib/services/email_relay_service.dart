@@ -78,7 +78,8 @@ typedef FindClientByCallsignCallback = String? Function(String callsign);
 typedef GetStationDomainCallback = String Function();
 
 /// Callback type for getting a client's npub by callsign
-typedef GetClientNpubCallback = String? Function(String callsign);
+// TODO: Re-enable when ECIES encryption is properly implemented
+// typedef GetClientNpubCallback = String? Function(String callsign);
 
 /// Pending email entry
 class PendingEmail {
@@ -638,14 +639,13 @@ class EmailRelayService {
 
   /// Handle an incoming email from external SMTP
   /// Parses MIME, matches reply threads, and delivers to connected clients
-  /// or caches encrypted for offline recipients.
+  /// or queues for delivery when offline recipients reconnect.
   Future<bool> handleIncomingEmail({
     required String from,
     required List<String> to,
     required String rawMessage,
     required SendToClientCallback sendToClient,
     required FindClientByCallsignCallback findClientByCallsign,
-    required GetClientNpubCallback getClientNpub,
     required GetStationDomainCallback getStationDomain,
   }) async {
     try {
@@ -708,21 +708,18 @@ class EmailRelayService {
             LogService().log('External email delivered: $senderEmail -> $callsign (thread: $threadId)');
           }
         } else {
-          // Offline: encrypt and cache
-          final npub = getClientNpub(callsign);
-          if (npub != null) {
-            final cached = await cacheEmailForRecipient(
-              recipientCallsign: callsign,
-              recipientNpub: npub,
-              emailMessage: emailMessage,
-            );
-            if (cached) {
-              anyDelivered = true;
-              LogService().log('External email cached for offline recipient: $callsign');
-            }
-          } else {
-            LogService().log('Cannot deliver email to $callsign: not connected and no npub available');
-          }
+          // Offline: queue for delivery when recipient reconnects
+          final pendingKey = '${threadId}_$callsign';
+          _pendingEmails[pendingKey] = PendingEmail(
+            message: emailMessage,
+            senderCallsign: senderEmail,
+            senderId: '',
+            recipient: callsign,
+            timestamp: DateTime.now(),
+            retryUntil: DateTime.now().add(Duration(hours: settings.retryHours)),
+          );
+          anyDelivered = true;
+          LogService().log('External email queued for offline recipient: $callsign (thread: $threadId)');
         }
       }
 

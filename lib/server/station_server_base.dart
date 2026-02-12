@@ -706,8 +706,6 @@ abstract class StationServerBase {
         getStationDomain: () => _settings.sslDomain ?? _settings.callsign.toLowerCase(),
       );
 
-      // Deliver cached encrypted emails (from offline SMTP delivery)
-      _deliverCachedEmails(client);
     }
   }
 
@@ -766,27 +764,6 @@ abstract class StationServerBase {
       }
     }
     return null;
-  }
-
-  /// Deliver cached encrypted emails when a client connects
-  Future<void> _deliverCachedEmails(StationClient client) async {
-    if (client.callsign == null) return;
-
-    try {
-      final blobs = await EmailRelayService().retrieveAndClearCache(client.callsign!);
-      for (final blob in blobs) {
-        final message = {
-          'type': 'email_receive_encrypted',
-          'encrypted_content': base64Encode(blob),
-        };
-        safeSocketSend(client, jsonEncode(message));
-      }
-      if (blobs.isNotEmpty) {
-        log('INFO', 'Delivered ${blobs.length} cached encrypted email(s) to ${client.callsign}');
-      }
-    } catch (e) {
-      log('ERROR', 'Failed to deliver cached emails to ${client.callsign}: $e');
-    }
   }
 
   void _removeClient(String clientId, {String reason = 'disconnected'}) {

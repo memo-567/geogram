@@ -30,6 +30,7 @@ class WebNavigation {
     required List<String> availableApps,
     required String activeApp,
     bool isStationPage = false,
+    bool isRootLevel = false,
     String? prefix,
   }) {
     final buffer = StringBuffer();
@@ -47,8 +48,15 @@ class WebNavigation {
       String href;
       if (isStationPage) {
         href = item.path;
+      } else if (isRootLevel) {
+        // Root-level device pages (e.g., /{callsign}/)
+        if (item.path == '/') {
+          href = './';
+        } else {
+          href = './${item.path.substring(1)}';
+        }
       } else {
-        // For device pages, use relative paths
+        // Sub-level device pages (e.g., /{callsign}/blog/)
         if (item.path == '/') {
           href = '../';
         } else {
@@ -108,6 +116,7 @@ class WebNavigation {
     bool hasFiles = false,
     bool hasAlerts = false,
     bool hasDownload = false,
+    bool isRootLevel = false,
   }) {
     final apps = <String>['home'];
     if (hasBlog) apps.add('blog');
@@ -122,6 +131,7 @@ class WebNavigation {
       availableApps: apps,
       activeApp: activeApp,
       isStationPage: false,
+      isRootLevel: isRootLevel,
     );
   }
 

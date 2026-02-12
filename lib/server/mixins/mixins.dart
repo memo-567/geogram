@@ -1,4 +1,5 @@
 // Barrel export for server mixins
+export 'email_handler_mixin.dart';
 export 'rate_limit_mixin.dart';
 export 'health_watchdog_mixin.dart';
 export 'ssl_mixin.dart';

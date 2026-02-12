@@ -45,6 +45,7 @@ import '../services/nostr_blossom_service.dart';
 import '../services/nostr_relay_service.dart';
 import '../services/nostr_relay_storage.dart';
 import '../services/nostr_storage_paths.dart';
+import '../server/mixins/email_handler_mixin.dart';
 
 /// App version - use central version.dart for consistency
 import '../version.dart' show appVersion;
@@ -541,7 +542,7 @@ class ChatMessage {
 }
 
 /// Connected WebSocket client
-class PureConnectedClient {
+class PureConnectedClient implements EmailClient {
   final WebSocket socket;
   final String id;
   String? callsign;
@@ -716,7 +717,7 @@ class PureTileCache {
 }
 
 /// Pure Dart station server for CLI mode
-class PureStationServer {
+class PureStationServer with EmailHandlerMixin {
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
   SMTPServer? _smtpServer;
@@ -764,6 +765,26 @@ class PureStationServer {
   AlertHandler? _alertApi;
   PlaceHandler? _placeApi;
   FeedbackHandler? _feedbackApi;
+
+  // ── EmailHandlerMixin interface ─────────────────────────────────
+  @override
+  void emailLog(String level, String message) => _log(level, message);
+  @override
+  String get stationDomain => _settings.sslDomain ?? _settings.callsign.toLowerCase();
+  @override
+  EmailClient? emailGetClientById(String clientId) => _clients[clientId];
+  @override
+  EmailClient? emailFindClientByCallsign(String callsign) {
+    try {
+      return _clients.values.firstWhere(
+        (c) => c.callsign?.toUpperCase() == callsign.toUpperCase(),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+  @override
+  bool emailSafeSocketSend(PureConnectedClient client, String data) => _safeSocketSend(client, data);
 
   // NOSTR relay + Blossom
   NostrRelayStorage? _nostrStorage;
@@ -1618,8 +1639,8 @@ class PureStationServer {
         );
 
         // Set up mail delivery callback
-        _smtpServer!.onMailReceived = _handleIncomingEmail;
-        _smtpServer!.validateRecipient = _validateLocalRecipient;
+        _smtpServer!.onMailReceived = handleIncomingEmail;
+        _smtpServer!.validateRecipient = validateLocalRecipient;
 
         final started = await _smtpServer!.start();
         if (started) {
@@ -2793,8 +2814,7 @@ class PureStationServer {
 
             // Deliver any pending emails for this client
             if (callsign != null) {
-              _deliverPendingEmails(client, callsign);
-              _deliverCachedEmails(client);
+              deliverPendingEmails(client, callsign);
             }
             break;
 
@@ -3020,7 +3040,7 @@ class PureStationServer {
 
           // Email relay - forward emails between connected clients
           case 'email_send':
-            _handleEmailSend(client, message);
+            handleEmailSend(client, message);
             break;
 
           default:
@@ -3306,123 +3326,6 @@ class PureStationServer {
         'session_id': sessionId,
       }));
     }
-  }
-
-  /// Handle email send request using shared EmailRelayService
-  void _handleEmailSend(PureConnectedClient client, Map<String, dynamic> message) {
-    final emailRelay = EmailRelayService();
-
-    emailRelay.handleEmailSend(
-      message: message,
-      senderCallsign: client.callsign ?? 'unknown',
-      senderId: client.id,
-      sendToClient: (clientId, msg) {
-        final target = _clients[clientId];
-        if (target != null) {
-          return _safeSocketSend(target, msg);
-        }
-        return false;
-      },
-      findClientByCallsign: (callsign) {
-        try {
-          final target = _clients.values.firstWhere(
-            (c) => c.callsign?.toUpperCase() == callsign.toUpperCase(),
-          );
-          return target.id;
-        } catch (_) {
-          return null;
-        }
-      },
-      getStationDomain: () => _settings.sslDomain ?? _settings.callsign.toLowerCase(),
-    );
-  }
-
-  /// Deliver pending emails to a newly connected client
-  void _deliverPendingEmails(PureConnectedClient client, String callsign) {
-    final emailRelay = EmailRelayService();
-
-    emailRelay.deliverPendingEmails(
-      clientId: client.id,
-      callsign: callsign,
-      sendToClient: (clientId, msg) {
-        final target = _clients[clientId];
-        if (target != null) {
-          return _safeSocketSend(target, msg);
-        }
-        return false;
-      },
-      getStationDomain: () => _settings.sslDomain ?? _settings.callsign.toLowerCase(),
-    );
-  }
-
-  /// Deliver cached encrypted emails when a client connects
-  Future<void> _deliverCachedEmails(PureConnectedClient client) async {
-    if (client.callsign == null) return;
-    try {
-      final blobs = await EmailRelayService().retrieveAndClearCache(client.callsign!);
-      for (final blob in blobs) {
-        _safeSocketSend(client, jsonEncode({
-          'type': 'email_receive_encrypted',
-          'encrypted_content': base64Encode(blob),
-        }));
-      }
-      if (blobs.isNotEmpty) {
-        _log('INFO', 'Delivered ${blobs.length} cached encrypted email(s) to ${client.callsign}');
-      }
-    } catch (e) {
-      _log('ERROR', 'Failed to deliver cached emails to ${client.callsign}: $e');
-    }
-  }
-
-  /// Handle incoming email from external SMTP server
-  ///
-  /// Delegates to EmailRelayService for MIME parsing, reply threading,
-  /// and online/offline delivery.
-  Future<bool> _handleIncomingEmail(
-    String from,
-    List<String> to,
-    String rawMessage,
-  ) async {
-    _log('INFO', 'Received external email from $from to ${to.join(", ")}');
-    return EmailRelayService().handleIncomingEmail(
-      from: from,
-      to: to,
-      rawMessage: rawMessage,
-      sendToClient: (clientId, msg) {
-        final target = _clients[clientId];
-        return target != null ? _safeSocketSend(target, msg) : false;
-      },
-      findClientByCallsign: (callsign) {
-        try {
-          final target = _clients.values.firstWhere(
-            (c) => c.callsign?.toUpperCase() == callsign.toUpperCase(),
-          );
-          return target.id;
-        } catch (_) {
-          return null;
-        }
-      },
-      getClientNpub: (callsign) {
-        for (final client in _clients.values) {
-          if (client.callsign?.toUpperCase() == callsign.toUpperCase() &&
-              client.npub != null) {
-            return client.npub;
-          }
-        }
-        return Nip05RegistryService().getRegistration(callsign)?.npub;
-      },
-      getStationDomain: () =>
-          _settings.sslDomain ?? _settings.callsign.toLowerCase(),
-    );
-  }
-
-  /// Validate if an email address is for a local user via NIP-05 registry
-  bool _validateLocalRecipient(String email) {
-    if (email.isEmpty) return false;
-    final atIndex = email.indexOf('@');
-    if (atIndex <= 0) return false;
-    final localPart = email.substring(0, atIndex).toUpperCase();
-    return Nip05RegistryService().getRegistration(localPart) != null;
   }
 
   /// Handle incoming NOSTR event from WebSocket

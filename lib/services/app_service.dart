@@ -331,6 +331,7 @@ class AppService {
       final menuItems = WebNavigation.generateDeviceMenuItems(
         activeApp: 'home',
         hasBlog: recentPosts.isNotEmpty,
+        isRootLevel: true,
       );
 
       // Process template with dynamic content
