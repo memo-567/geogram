@@ -53,7 +53,6 @@ SolidCompression=yes
 LZMAUseSeparateProcess=yes
 DisableProgramGroupPage=yes
 DisableDirPage=no
-DisableLicensePage=yes
 CloseApplications=yes
 RestartApplications=no
 CreateUninstallRegKey=not IsPortableMode
