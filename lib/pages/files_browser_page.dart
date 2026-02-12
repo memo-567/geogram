@@ -87,8 +87,13 @@ class _FilesBrowserPageState extends State<FilesBrowserPage> {
 
   static const _textExtensions = {
     'txt', 'log', 'json', 'xml', 'csv', 'yaml', 'yml', 'ini', 'conf',
-    'dart', 'py', 'js', 'ts', 'css', 'html', 'sh', 'c', 'cpp', 'java',
-    'kt', 'go', 'rs', 'rb', 'php', 'toml', 'cfg',
+    'dart', 'py', 'js', 'ts', 'css', 'html', 'htm', 'sh', 'c', 'cpp',
+    'java', 'kt', 'go', 'rs', 'rb', 'php', 'toml', 'cfg', 'bat',
+    'sql', 'lua', 'swift', 'r', 'pl', 'pm', 'scala', 'hs',
+    'ex', 'exs', 'clj', 'zig', 'nim', 'makefile', 'dockerfile',
+    'gradle', 'tf', 'ps1', 'fish', 'zsh', 'scss', 'sass', 'less',
+    'jsx', 'tsx', 'vue', 'svelte', 'graphql', 'gql',
+    'bash', 'properties',
   };
 
   static const _audioExtensions = {

@@ -50,6 +50,10 @@ This document catalogs reusable UI components available in the Geogram codebase.
 ### Tree Widgets
 - [FolderTreeWidget](#foldertreewidget) - Folder navigation
 
+### Code Utilities
+- [SyntaxHighlightController](#syntaxhighlightcontroller) - TextEditingController with live syntax coloring
+- [convertNodesToSpans](#convertnodetospans) - Convert highlight.js nodes to Flutter TextSpan list
+
 ### QR Code Widgets
 - [QrPreviewWidget](#qrpreviewwidget) - QR code preview with customizations
 
@@ -785,7 +789,7 @@ Scaffold-free document viewer widget for embedding in split-pane layouts, dialog
 | `onSaved` | VoidCallback? | No | Called after a successful file save |
 
 **Static helper:**
-- `DocumentViewerWidget.isEditableExtension(String ext)` — returns true for extensions that support text editing: `txt`, `log`, `json`, `xml`, `csv`, `yaml`, `yml`, `ini`, `conf`, `cfg`, `toml`, `md`, `markdown`, `html`, `htm`, `css`, `dart`, `py`, `js`, `ts`, `java`, `c`, `cpp`, `h`, `sh`, `bat`, `kt`, `go`, `rs`, `rb`, `php`.
+- `DocumentViewerWidget.isEditableExtension(String ext)` — returns true for extensions that support text editing: `txt`, `log`, `json`, `xml`, `csv`, `yaml`, `yml`, `ini`, `conf`, `cfg`, `toml`, `md`, `markdown`, `html`, `htm`, `css`, `dart`, `py`, `js`, `ts`, `java`, `c`, `cpp`, `h`, `sh`, `bat`, `kt`, `go`, `rs`, `rb`, `php`, `sql`, `lua`, `swift`, `r`, `pl`, `pm`, `scala`, `hs`, `ex`, `exs`, `clj`, `zig`, `nim`, `makefile`, `dockerfile`, `gradle`, `tf`, `ps1`, `fish`, `zsh`, `scss`, `sass`, `less`, `jsx`, `tsx`, `vue`, `svelte`, `graphql`, `gql`, `bash`, `properties`.
 
 **Public state API** (via `GlobalKey<DocumentViewerWidgetState>`):
 - `isEditing` — whether the widget is in edit mode
@@ -871,6 +875,38 @@ Navigator.push(
 - Selectable text
 - Page count display for PDFs
 - Error handling with retry button
+- Syntax highlighting for 50+ languages (preview & edit mode)
+
+---
+
+### SyntaxHighlightController
+
+**File:** `lib/widgets/syntax_highlight_controller.dart`
+
+A `TextEditingController` that applies syntax highlighting via the `highlighting` package (Dart port of highlight.js). Drop into any `TextField` for live coloring while typing. Includes a text cache to avoid re-parsing on every frame, and a 100 KB size limit that falls back to plain text for large files.
+
+**Constructor:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `languageId` | String | Yes | highlight.js language ID (e.g. `'dart'`, `'json'`) |
+| `brightness` | Brightness | No | Initial theme brightness (default: `Brightness.dark`) |
+| `text` | String? | No | Initial text content |
+
+**Methods:**
+- `updateBrightness(Brightness)` — swap between `vs2015Theme` (dark) and `githubTheme` (light)
+
+**Usage:**
+```dart
+final controller = SyntaxHighlightController(languageId: 'dart');
+TextField(controller: controller, maxLines: null, ...)
+```
+
+**Helper functions (same file):**
+- `languageIdForFile(String path)` — returns highlight.js language ID for a file path, or `null` for plain text
+- `convertNodesToSpans(List<Node> nodes, Map<String, TextStyle> theme)` — converts a highlight.js parse tree to `TextSpan` list (reusable for read-only preview)
+- `extensionToLanguageId` — const map of file extension → language ID (50+ entries)
+
+**Used by:** `DocumentViewerWidget` (both preview and edit modes).
 
 ---
 

@@ -9,8 +9,13 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:highlighting/highlighting.dart';
+import 'package:flutter_highlighting/themes/vs2015.dart';
+import 'package:flutter_highlighting/themes/github.dart';
 import 'package:pdfx/pdfx.dart';
 import 'package:path/path.dart' as path;
+
+import '../widgets/syntax_highlight_controller.dart';
 
 /// Document viewer type options.
 enum DocumentViewerType {
@@ -60,6 +65,12 @@ class DocumentViewerWidget extends StatefulWidget {
       'cfg', 'toml', 'md', 'markdown', 'html', 'htm', 'css',
       'dart', 'py', 'js', 'ts', 'java', 'c', 'cpp', 'h', 'sh', 'bat',
       'kt', 'go', 'rs', 'rb', 'php',
+      // New extensions
+      'sql', 'lua', 'swift', 'r', 'pl', 'pm', 'scala', 'hs',
+      'ex', 'exs', 'clj', 'zig', 'nim', 'makefile', 'dockerfile',
+      'gradle', 'tf', 'ps1', 'fish', 'zsh', 'scss', 'sass', 'less',
+      'jsx', 'tsx', 'vue', 'svelte', 'graphql', 'gql',
+      'bash', 'properties',
     };
     return editable.contains(ext.toLowerCase());
   }
@@ -84,11 +95,38 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
   bool _hasUnsavedChanges = false;
   late TextEditingController _editController;
 
+  // Syntax highlighting state
+  String? _languageId;
+
+  /// Create the appropriate controller for the current file.
+  TextEditingController _createController() {
+    _languageId = languageIdForFile(widget.filePath);
+    if (_languageId != null) {
+      final brightness =
+          WidgetsBinding.instance.platformDispatcher.platformBrightness;
+      return SyntaxHighlightController(
+        languageId: _languageId!,
+        brightness: brightness,
+      );
+    }
+    return TextEditingController();
+  }
+
   @override
   void initState() {
     super.initState();
-    _editController = TextEditingController();
+    _editController = _createController();
     _loadDocument();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Update syntax theme when brightness changes
+    final controller = _editController;
+    if (controller is SyntaxHighlightController) {
+      controller.updateBrightness(Theme.of(context).brightness);
+    }
   }
 
   @override
@@ -103,7 +141,8 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
       _textContent = null;
       _isEditing = false;
       _hasUnsavedChanges = false;
-      _editController.clear();
+      _editController.dispose();
+      _editController = _createController();
       _loadDocument();
     }
   }
@@ -149,6 +188,44 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
       case 'ini':
       case 'conf':
       case 'cfg':
+      case 'toml':
+      case 'kt':
+      case 'go':
+      case 'rs':
+      case 'rb':
+      case 'php':
+      // New extensions
+      case 'sql':
+      case 'lua':
+      case 'swift':
+      case 'r':
+      case 'pl':
+      case 'pm':
+      case 'scala':
+      case 'hs':
+      case 'ex':
+      case 'exs':
+      case 'clj':
+      case 'zig':
+      case 'nim':
+      case 'makefile':
+      case 'dockerfile':
+      case 'gradle':
+      case 'tf':
+      case 'ps1':
+      case 'fish':
+      case 'zsh':
+      case 'bash':
+      case 'scss':
+      case 'sass':
+      case 'less':
+      case 'jsx':
+      case 'tsx':
+      case 'vue':
+      case 'svelte':
+      case 'graphql':
+      case 'gql':
+      case 'properties':
       default:
         return DocumentViewerType.text;
     }
@@ -593,20 +670,58 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
     );
   }
 
-  /// Build plain text viewer.
+  /// Build text viewer with optional syntax highlighting.
   Widget _buildTextViewer() {
-    final theme = Theme.of(context);
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: SelectableText(
-        _textContent ?? '',
-        style: theme.textTheme.bodyMedium?.copyWith(
-          fontFamily: 'monospace',
-          height: 1.5,
-        ),
-      ),
+    final appTheme = Theme.of(context);
+    final content = _textContent ?? '';
+    final monoStyle = appTheme.textTheme.bodyMedium?.copyWith(
+      fontFamily: 'monospace',
+      height: 1.5,
     );
+
+    // No highlighting for plain text or oversized files
+    if (_languageId == null || content.length > 100 * 1024) {
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: SelectableText(content, style: monoStyle),
+      );
+    }
+
+    // Parse and highlight
+    try {
+      final result = highlight.parse(content, languageId: _languageId!);
+      final nodes = result.nodes;
+      if (nodes == null || nodes.isEmpty) {
+        return SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: SelectableText(content, style: monoStyle),
+        );
+      }
+
+      final hlTheme = appTheme.brightness == Brightness.dark
+          ? vs2015Theme
+          : githubTheme;
+      final spans = convertNodesToSpans(nodes, hlTheme);
+
+      // Merge root color from theme into the base style
+      final rootStyle = hlTheme['root'];
+      final mergedStyle = monoStyle?.copyWith(
+        color: rootStyle?.color ?? monoStyle.color,
+      );
+
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: SelectableText.rich(
+          TextSpan(style: mergedStyle, children: spans),
+        ),
+      );
+    } catch (_) {
+      // Fallback to plain text on parse error
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: SelectableText(content, style: monoStyle),
+      );
+    }
   }
 }
 
