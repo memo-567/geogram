@@ -11727,19 +11727,19 @@ class LogApiService {
       }
 
       // Check for X-Device-Callsign header (used by proxy)
-      // If present, serve that device's blog instead of current user's blog
+      // If it matches our own callsign, it's still our own blog (not a proxy request)
       final deviceCallsign = request.headers['x-device-callsign'];
-      if (deviceCallsign != null && deviceCallsign.isNotEmpty) {
+      final isOwnBlog = deviceCallsign == null ||
+          deviceCallsign.isEmpty ||
+          deviceCallsign == callsign;
+      if (!isOwnBlog) {
         callsign = deviceCallsign;
         LogService().log('Blog HTML: Serving blog for device $deviceCallsign (from proxy header)');
       }
 
       // Read blog post directly from storage (no BlogService needed)
       final ProfileStorage blogStorage;
-      if (deviceCallsign != null && deviceCallsign.isNotEmpty) {
-        // Proxy case: serving another device's blog (unencrypted access)
-        blogStorage = FilesystemProfileStorage('$dataDir/devices/$deviceCallsign');
-      } else {
+      if (isOwnBlog) {
         // Own blog: use ProfileStorage (handles encrypted or plain)
         final storage = AppService().profileStorage;
         if (storage == null) {
@@ -11749,6 +11749,9 @@ class LogApiService {
           );
         }
         blogStorage = storage;
+      } else {
+        // Proxy case: serving another device's blog (unencrypted access)
+        blogStorage = FilesystemProfileStorage('$dataDir/devices/$deviceCallsign');
       }
       final year = filename.length >= 4 ? filename.substring(0, 4) : '';
       final postRelativePath = 'blog/$year/$filename';
