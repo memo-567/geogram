@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/gestures.dart';
@@ -105,6 +106,10 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
   final _editScrollController = ScrollController();
   final _gutterScrollController = ScrollController();
 
+  // Debounced gutter state for editor (lineCount, activeLine)
+  final _gutterState = ValueNotifier<(int, int?)>((1, null));
+  Timer? _gutterDebounce;
+
   void _syncGutterScroll() {
     if (_gutterScrollController.hasClients) {
       final max = _gutterScrollController.position.maxScrollExtent;
@@ -112,6 +117,21 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
         _editScrollController.offset.clamp(0.0, max),
       );
     }
+  }
+
+  void _scheduleGutterUpdate() {
+    _gutterDebounce?.cancel();
+    _gutterDebounce = Timer(const Duration(milliseconds: 150), () {
+      if (!mounted) return;
+      final text = _editController.text;
+      final lineCount = '\n'.allMatches(text).length + 1;
+      int? activeLine;
+      final offset = _editController.selection.baseOffset;
+      if (offset >= 0) {
+        activeLine = _lineFromOffset(text, offset);
+      }
+      _gutterState.value = (lineCount, activeLine);
+    });
   }
 
   /// Compute 0-indexed line number from a character offset in [text].
@@ -163,6 +183,7 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
   void initState() {
     super.initState();
     _editController = _createController();
+    _editController.addListener(_scheduleGutterUpdate);
     _editScrollController.addListener(_syncGutterScroll);
     _loadDocument();
   }
@@ -190,20 +211,26 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
       _isEditing = false;
       _hasUnsavedChanges = false;
       _activeLine = null;
+      _editController.removeListener(_scheduleGutterUpdate);
       _editController.dispose();
       _editController = _createController();
+      _editController.addListener(_scheduleGutterUpdate);
+      _gutterState.value = (1, null);
       _loadDocument();
     }
   }
 
   @override
   void dispose() {
+    _gutterDebounce?.cancel();
     _pdfDocument?.close();
     _pdfTransformController.dispose();
     _editScrollController.removeListener(_syncGutterScroll);
     _editScrollController.dispose();
     _gutterScrollController.dispose();
+    _editController.removeListener(_scheduleGutterUpdate);
     _editController.dispose();
+    _gutterState.dispose();
     super.dispose();
   }
 
@@ -401,6 +428,9 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
   /// Enter edit mode (loads current text content into the editor).
   void startEditing() {
     _editController.text = _textContent ?? '';
+    final text = _editController.text;
+    final lc = '\n'.allMatches(text).length + 1;
+    _gutterState.value = (lc, null);
     setState(() => _isEditing = true);
   }
 
@@ -518,23 +548,15 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Line number gutter — rebuilds on text/selection changes
+            // Line number gutter — debounced, rebuilds after 150ms of inactivity
             Padding(
               padding: const EdgeInsets.only(left: 16),
-              child: ListenableBuilder(
-                listenable: _editController,
-                builder: (context, _) {
-                  final text = _editController.text;
-                  final lineCount = '\n'.allMatches(text).length + 1;
+              child: ValueListenableBuilder<(int, int?)>(
+                valueListenable: _gutterState,
+                builder: (context, state, _) {
+                  final (lineCount, activeLine) = state;
                   final digits = lineCount.toString().length;
                   final gutterWidth = (digits < 2 ? 2 : digits) * 10.0 + 12.0;
-
-                  // Active line from cursor position
-                  int? activeLine;
-                  final offset = _editController.selection.baseOffset;
-                  if (offset >= 0) {
-                    activeLine = _lineFromOffset(text, offset);
-                  }
 
                   return SizedBox(
                     width: gutterWidth,
