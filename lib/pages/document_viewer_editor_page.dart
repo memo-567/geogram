@@ -683,7 +683,10 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
     if (_languageId == null || content.length > 100 * 1024) {
       return SingleChildScrollView(
         padding: const EdgeInsets.all(16),
-        child: SelectableText(content, style: monoStyle),
+        child: SizedBox(
+          width: double.infinity,
+          child: SelectableText(content, style: monoStyle),
+        ),
       );
     }
 
@@ -694,7 +697,10 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
       if (nodes == null || nodes.isEmpty) {
         return SingleChildScrollView(
           padding: const EdgeInsets.all(16),
-          child: SelectableText(content, style: monoStyle),
+          child: SizedBox(
+            width: double.infinity,
+            child: SelectableText(content, style: monoStyle),
+          ),
         );
       }
 
@@ -711,15 +717,21 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
 
       return SingleChildScrollView(
         padding: const EdgeInsets.all(16),
-        child: SelectableText.rich(
-          TextSpan(style: mergedStyle, children: spans),
+        child: SizedBox(
+          width: double.infinity,
+          child: SelectableText.rich(
+            TextSpan(style: mergedStyle, children: spans),
+          ),
         ),
       );
     } catch (_) {
       // Fallback to plain text on parse error
       return SingleChildScrollView(
         padding: const EdgeInsets.all(16),
-        child: SelectableText(content, style: monoStyle),
+        child: SizedBox(
+          width: double.infinity,
+          child: SelectableText(content, style: monoStyle),
+        ),
       );
     }
   }
