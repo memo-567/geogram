@@ -2041,7 +2041,6 @@ class _AppsPageState extends State<AppsPage> {
     _DefaultAppType('wallet', Icons.account_balance_wallet),
     _DefaultAppType('log', Icons.article_outlined),
     _DefaultAppType('backup', Icons.backup),
-    _DefaultAppType('groups', Icons.groups),
     _DefaultAppType('console', Icons.terminal),
     _DefaultAppType('reader', Icons.menu_book),
   ];

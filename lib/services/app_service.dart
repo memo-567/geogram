@@ -207,7 +207,6 @@ class AppService {
     'contacts',
     'places',
     'events',
-    'groups',
     'transfer',
     'tracker',
     'blog',
