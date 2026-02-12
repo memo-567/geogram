@@ -448,7 +448,8 @@ class _WebsiteBrowserPageState extends State<WebsiteBrowserPage>
         ),
       ),
       child: InkWell(
-        onTap: () {
+        onTap: () => launchUrl(Uri.parse(publicUrl)),
+        onLongPress: () {
           Clipboard.setData(ClipboardData(text: publicUrl));
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('URL copied to clipboard')),
@@ -467,7 +468,7 @@ class _WebsiteBrowserPageState extends State<WebsiteBrowserPage>
                 overflow: TextOverflow.ellipsis,
               ),
             ),
-            Icon(Icons.copy, size: 18, color: theme.colorScheme.onSurfaceVariant),
+            Icon(Icons.open_in_new, size: 18, color: theme.colorScheme.onSurfaceVariant),
           ],
         ),
       ),
