@@ -10,6 +10,13 @@ Every message is signed with cryptographic keys, so you always know who you're t
 
 Built for communities that need to communicate when things get difficult: remote areas, disaster response, places where the network is censored or unreliable, or simply people who believe their conversations shouldn't depend on corporate infrastructure.
 
+**Try it now on Linux** — one command, no root required:
+```
+curl -fsSL https://raw.githubusercontent.com/geograms/geogram/main/linux/scripts/get-geogram.sh | bash
+```
+
+[Android APK](https://github.com/geograms/geogram/releases/latest/download/geogram.apk) · [All platforms](https://github.com/geograms/geogram/releases/latest)
+
 ---
 
 ## Station Server
