@@ -2794,6 +2794,7 @@ class PureStationServer {
             // Deliver any pending emails for this client
             if (callsign != null) {
               _deliverPendingEmails(client, callsign);
+              _deliverCachedEmails(client);
             }
             break;
 
@@ -3354,100 +3355,74 @@ class PureStationServer {
     );
   }
 
+  /// Deliver cached encrypted emails when a client connects
+  Future<void> _deliverCachedEmails(PureConnectedClient client) async {
+    if (client.callsign == null) return;
+    try {
+      final blobs = await EmailRelayService().retrieveAndClearCache(client.callsign!);
+      for (final blob in blobs) {
+        _safeSocketSend(client, jsonEncode({
+          'type': 'email_receive_encrypted',
+          'encrypted_content': base64Encode(blob),
+        }));
+      }
+      if (blobs.isNotEmpty) {
+        _log('INFO', 'Delivered ${blobs.length} cached encrypted email(s) to ${client.callsign}');
+      }
+    } catch (e) {
+      _log('ERROR', 'Failed to deliver cached emails to ${client.callsign}: $e');
+    }
+  }
+
   /// Handle incoming email from external SMTP server
   ///
-  /// Called by SMTPServer when a message is received.
-  /// Parses the MIME message and delivers to local recipients via WebSocket.
+  /// Delegates to EmailRelayService for MIME parsing, reply threading,
+  /// and online/offline delivery.
   Future<bool> _handleIncomingEmail(
     String from,
     List<String> to,
     String rawMessage,
   ) async {
-    try {
-      _log('INFO', 'Received external email from $from to ${to.join(", ")}');
-
-      // Parse the MIME message
-      final parser = MIMEParser(rawMessage);
-      final subject = parser.subject ?? '(No Subject)';
-      final body = parser.body;
-
-      // Create thread ID from message ID or generate one
-      final messageId = parser.messageId ?? DateTime.now().millisecondsSinceEpoch.toString();
-      final threadId = 'ext_${messageId.hashCode.abs()}';
-
-      // Deliver to each local recipient
-      bool anyDelivered = false;
-      for (final recipient in to) {
-        final callsign = _extractCallsign(recipient);
-
-        // Find connected client
-        PureConnectedClient? target;
+    _log('INFO', 'Received external email from $from to ${to.join(", ")}');
+    return EmailRelayService().handleIncomingEmail(
+      from: from,
+      to: to,
+      rawMessage: rawMessage,
+      sendToClient: (clientId, msg) {
+        final target = _clients[clientId];
+        return target != null ? _safeSocketSend(target, msg) : false;
+      },
+      findClientByCallsign: (callsign) {
         try {
-          target = _clients.values.firstWhere(
+          final target = _clients.values.firstWhere(
             (c) => c.callsign?.toUpperCase() == callsign.toUpperCase(),
           );
+          return target.id;
         } catch (_) {
-          // Recipient not connected
+          return null;
         }
-
-        if (target != null) {
-          // Deliver via WebSocket
-          final deliveryMessage = jsonEncode({
-            'type': 'email_receive',
-            'from': from,
-            'thread_id': threadId,
-            'subject': subject,
-            'content': base64Encode(utf8.encode(body)),
-            'external': true,
-            'delivered_at': DateTime.now().toUtc().toIso8601String(),
-          });
-
-          if (_safeSocketSend(target, deliveryMessage)) {
-            anyDelivered = true;
-            _log('INFO', 'External email delivered to $callsign');
+      },
+      getClientNpub: (callsign) {
+        for (final client in _clients.values) {
+          if (client.callsign?.toUpperCase() == callsign.toUpperCase() &&
+              client.npub != null) {
+            return client.npub;
           }
-        } else {
-          // Queue for later delivery
-          _log('INFO', 'Recipient $callsign not connected, email queued');
-          // TODO: Store in pending queue when recipient reconnects
-          anyDelivered = true; // Accept the message anyway
         }
-      }
-
-      return anyDelivered;
-    } catch (e) {
-      _log('ERROR', 'Failed to process incoming email: $e');
-      return false;
-    }
+        return Nip05RegistryService().getRegistration(callsign)?.npub;
+      },
+      getStationDomain: () =>
+          _settings.sslDomain ?? _settings.callsign.toLowerCase(),
+    );
   }
 
-  /// Validate if an email address is for a local user
-  ///
-  /// Used by SMTPServer to verify recipients before accepting mail.
+  /// Validate if an email address is for a local user via NIP-05 registry
   bool _validateLocalRecipient(String email) {
-    final callsign = _extractCallsign(email);
-
-    // Check if we know this callsign (either connected or registered)
-    // For now, accept all callsigns at our domain
-    // TODO: Check against NIP-05 registry for registered users
-
-    // Simple validation: callsign must be non-empty and alphanumeric
-    if (callsign.isEmpty) return false;
-    if (!RegExp(r'^[A-Z0-9]+$', caseSensitive: false).hasMatch(callsign)) {
-      return false;
-    }
-
-    _log('DEBUG', 'Validating recipient: $email (callsign: $callsign) - accepted');
-    return true;
-  }
-
-  /// Extract callsign from email address (user part before @)
-  String _extractCallsign(String email) {
+    if (email.isEmpty) return false;
     final atIndex = email.indexOf('@');
-    if (atIndex > 0) {
-      return email.substring(0, atIndex).toUpperCase();
-    }
-    return email.toUpperCase();
+    if (atIndex <= 0) return false;
+    final localPart = email.substring(0, atIndex).toUpperCase();
+    return Nip05RegistryService().getRegistration(localPart) != null;
   }
 
   /// Handle incoming NOSTR event from WebSocket
