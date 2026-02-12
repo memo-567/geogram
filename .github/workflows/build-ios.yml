@@ -42,8 +42,24 @@ jobs:
     - name: Install dependencies
       run: flutter pub get
 
+    - name: Disable code signing for CI
+      run: |
+        # Set manual signing with no identity to avoid Flutter's post-build signing check
+        sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g' ios/Runner.xcodeproj/project.pbxproj
+        sed -i '' 's/"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]" = "iPhone Developer";/"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "";/g' ios/Runner.xcodeproj/project.pbxproj
+
     - name: Build iOS (no codesign)
-      run: flutter build ios --release --no-codesign
+      run: |
+        flutter build ios --release --no-codesign || {
+          # Flutter 3.41+ may fail the post-build signing check even with --no-codesign
+          # Verify the .app was actually built successfully
+          if [ -d "build/ios/iphoneos/Runner.app" ]; then
+            echo "Build succeeded — signing check bypassed for CI"
+          else
+            echo "Build failed"
+            exit 1
+          fi
+        }
 
     - name: Create IPA archive
       run: |

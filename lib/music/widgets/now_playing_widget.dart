@@ -5,7 +5,7 @@
 
 import 'dart:io';
 
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide RepeatMode;
 
 import '../models/music_models.dart';
 import '../services/music_playback_service.dart';

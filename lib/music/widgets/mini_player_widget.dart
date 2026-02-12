@@ -3,7 +3,7 @@
  * License: Apache-2.0
  */
 
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide RepeatMode;
 
 import '../models/music_track.dart';
 import '../models/playback_queue.dart';
