@@ -16,7 +16,7 @@ APP_NAME="Geogram"
 # Resolve the bundle directory (works regardless of CWD or symlinks)
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUNDLE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+BUNDLE_DIR="$SCRIPT_DIR"
 
 # Sanity check: the main binary must be next to us
 if [ ! -x "$BUNDLE_DIR/geogram" ]; then
