@@ -86,6 +86,8 @@ dependencies:
   webview_flutter: ^4.10.0       # Cross-platform WebView for Console VM emulator
   webview_flutter_android: ^4.3.0  # Android WebView implementation
   webview_flutter_wkwebview: ^3.16.0  # iOS/macOS WebView implementation
+  webview_windows: ^0.4.0         # Windows WebView2 for website preview
+  webf: ^0.24.12                  # WebF runtime for Linux website preview (QuickJS engine)
   xterm: ^4.0.0                  # Terminal emulator widget for Linux native QEMU
   flutter_pty: ^0.4.1            # PTY support for Linux terminal
   flutter_contacts: ^1.1.9       # Device contacts access for import feature (Android)
@@ -217,3 +219,4 @@ dependency_overrides:
     path: third_party/whisper_flutter_new
   ble_peripheral:
     path: third_party/ble_peripheral  # Patched to skip bonding/pairing
+  intl: 0.20.2  # Override webf's intl ^0.19.0 constraint (compatible at runtime)

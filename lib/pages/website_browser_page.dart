@@ -13,6 +13,9 @@ import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart
 import 'package:path/path.dart' as p;
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_windows/webview_windows.dart' as wv_windows;
+import 'package:webf/webf.dart';
 
 import '../services/app_service.dart';
 import '../services/i18n_service.dart';
@@ -66,6 +69,17 @@ class _WebsiteBrowserPageState extends State<WebsiteBrowserPage>
   String? _htmlContent;
   bool _previewLoading = false;
 
+  // --- WebView state (platform-adaptive) ---
+  /// Directory from which WebView loads index.html.
+  /// For encrypted storage this is a temp extraction dir; otherwise widget.appPath.
+  String? _previewDir;
+  WebViewController? _webViewController; // Android/iOS/macOS
+  wv_windows.WebviewController? _winWebViewController; // Windows
+  bool _winWebViewReady = false;
+  int _webfKey = 0; // Force-rebuild key for WebF widget on Linux
+  bool _webfManagerInitialized = false;
+  String? _tempPreviewDir; // Track temp dir for cleanup
+
   static const _imageExtensions = {
     'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico', 'heic',
   };
@@ -110,48 +124,173 @@ class _WebsiteBrowserPageState extends State<WebsiteBrowserPage>
     _tabController.dispose();
     _imageFocusNode.dispose();
     _transformController.dispose();
+    _winWebViewController?.dispose();
+    _cleanupTempPreview();
     super.dispose();
+  }
+
+  void _cleanupTempPreview() {
+    if (_tempPreviewDir != null) {
+      try {
+        Directory(_tempPreviewDir!).deleteSync(recursive: true);
+      } catch (_) {}
+      _tempPreviewDir = null;
+    }
   }
 
   void _onTabChanged() {
     if (!_tabController.indexIsChanging && _tabController.index == 1) {
-      _loadHtmlPreview();
+      _loadPreview();
     }
     setState(() {});
   }
 
-  Future<void> _loadHtmlPreview() async {
+  Future<void> _loadPreview() async {
     setState(() => _previewLoading = true);
     try {
-      String? content;
-      final storage = AppService().profileStorage;
-      if (storage != null) {
-        final scoped = ScopedProfileStorage.fromAbsolutePath(
-          storage,
-          widget.appPath,
-        );
-        content = await scoped.readString('index.html');
+      await _resolvePreviewDir();
+
+      if (_previewDir == null && _htmlContent == null) {
+        if (mounted) setState(() => _previewLoading = false);
+        return;
       }
-      // Fallback to raw file if no storage or not found
-      if (content == null) {
-        final file = File(p.join(widget.appPath, 'index.html'));
-        if (await file.exists()) {
-          content = await file.readAsString();
+
+      final indexPath = _previewDir != null
+          ? p.join(_previewDir!, 'index.html')
+          : null;
+
+      if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
+        if (indexPath != null) {
+          _webViewController ??= WebViewController()
+            ..setJavaScriptMode(JavaScriptMode.unrestricted)
+            ..setBackgroundColor(Colors.white)
+            ..setNavigationDelegate(NavigationDelegate(
+              onNavigationRequest: (request) {
+                if (request.url.startsWith('file://')) {
+                  return NavigationDecision.navigate;
+                }
+                return NavigationDecision.prevent;
+              },
+            ));
+          _webViewController!.loadFile(indexPath);
         }
+      } else if (Platform.isWindows) {
+        if (indexPath != null) {
+          if (_winWebViewController == null) {
+            _winWebViewController = wv_windows.WebviewController();
+            await _winWebViewController!.initialize();
+            await _winWebViewController!.setPopupWindowPolicy(
+              wv_windows.WebviewPopupWindowPolicy.deny,
+            );
+            _winWebViewReady = true;
+          }
+          await _winWebViewController!
+              .loadUrl(Uri.file(indexPath).toString());
+        }
+      } else if (Platform.isLinux) {
+        if (!_webfManagerInitialized) {
+          WebFControllerManager.instance.initialize(
+            const WebFControllerManagerConfig(
+              maxAliveInstances: 1,
+              maxAttachedInstances: 1,
+              enableDevTools: false,
+            ),
+          );
+          _webfManagerInitialized = true;
+        }
+        _webfKey++; // Force widget rebuild
       }
-      if (mounted) {
-        setState(() {
-          _htmlContent = content;
-          _previewLoading = false;
-        });
-      }
+
+      if (mounted) setState(() => _previewLoading = false);
     } catch (e) {
       if (mounted) {
         setState(() {
+          _previewDir = null;
           _htmlContent = null;
           _previewLoading = false;
         });
       }
+    }
+  }
+
+  /// Determine the filesystem directory containing index.html for WebView.
+  /// For encrypted storage, extracts the www folder to a temp directory.
+  Future<void> _resolvePreviewDir() async {
+    final storage = AppService().profileStorage;
+
+    // For encrypted storage, extract the www folder to temp
+    if (storage != null && storage.isEncrypted) {
+      final basePath = storage.basePath;
+      if (p.isWithin(basePath, widget.appPath)) {
+        await _extractWwwToTemp(storage);
+        return;
+      }
+    }
+
+    // Check if index.html exists on disk
+    final indexFile = File(p.join(widget.appPath, 'index.html'));
+    if (await indexFile.exists()) {
+      _previewDir = widget.appPath;
+      _htmlContent = await indexFile.readAsString();
+      return;
+    }
+
+    // Try reading from ProfileStorage (non-encrypted but routed through storage)
+    if (storage != null) {
+      final scoped = ScopedProfileStorage.fromAbsolutePath(
+        storage,
+        widget.appPath,
+      );
+      final content = await scoped.readString('index.html');
+      if (content != null) {
+        _htmlContent = content;
+        _previewDir = widget.appPath;
+        return;
+      }
+    }
+
+    _previewDir = null;
+    _htmlContent = null;
+  }
+
+  /// Extract the entire www folder from encrypted storage to a temp directory
+  /// so that WebView can load files from disk.
+  Future<void> _extractWwwToTemp(ProfileStorage storage) async {
+    _cleanupTempPreview(); // Clean up any previous extraction
+
+    final tempDir = p.join(
+      Directory.systemTemp.path,
+      'geogram_www_preview_${DateTime.now().millisecondsSinceEpoch}',
+    );
+    await Directory(tempDir).create(recursive: true);
+    _tempPreviewDir = tempDir;
+
+    final basePath = storage.basePath;
+    final relativePath = widget.appPath.substring(basePath.length + 1);
+
+    // List all files in the www folder recursively
+    final entries =
+        await storage.listDirectory(relativePath, recursive: true);
+
+    for (final entry in entries) {
+      if (!entry.isDirectory) {
+        final targetPath = p.join(tempDir, entry.path);
+        await Directory(p.dirname(targetPath)).create(recursive: true);
+        await storage.copyToExternal(
+          p.join(relativePath, entry.path),
+          targetPath,
+        );
+      }
+    }
+
+    // Check if index.html was extracted
+    final indexFile = File(p.join(tempDir, 'index.html'));
+    if (await indexFile.exists()) {
+      _previewDir = tempDir;
+      _htmlContent = await indexFile.readAsString();
+    } else {
+      _previewDir = null;
+      _htmlContent = null;
     }
   }
 
@@ -856,7 +995,7 @@ class _WebsiteBrowserPageState extends State<WebsiteBrowserPage>
   }
 
   // ---------------------------------------------------------------------------
-  // Preview tab (HtmlWidget)
+  // Preview tab (platform-adaptive WebView)
   // ---------------------------------------------------------------------------
 
   Widget _buildPreviewTab() {
@@ -864,7 +1003,7 @@ class _WebsiteBrowserPageState extends State<WebsiteBrowserPage>
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (_htmlContent == null) {
+    if (_previewDir == null && _htmlContent == null) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -886,7 +1025,7 @@ class _WebsiteBrowserPageState extends State<WebsiteBrowserPage>
             ),
             const SizedBox(height: 24),
             FilledButton.icon(
-              onPressed: _loadHtmlPreview,
+              onPressed: _loadPreview,
               icon: const Icon(Icons.refresh),
               label: const Text('Refresh'),
             ),
@@ -897,24 +1036,60 @@ class _WebsiteBrowserPageState extends State<WebsiteBrowserPage>
 
     return Stack(
       children: [
-        SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: HtmlWidget(
-            _htmlContent!,
-            baseUrl: Uri.file(widget.appPath + Platform.pathSeparator),
-            textStyle: Theme.of(context).textTheme.bodyMedium,
-          ),
-        ),
+        _buildPreviewContent(),
         Positioned(
           right: 16,
           bottom: 16,
           child: FloatingActionButton.small(
-            onPressed: _loadHtmlPreview,
+            onPressed: _loadPreview,
             tooltip: 'Refresh preview',
             child: const Icon(Icons.refresh),
           ),
         ),
       ],
     );
+  }
+
+  Widget _buildPreviewContent() {
+    // Android / iOS / macOS — webview_flutter
+    if ((Platform.isAndroid || Platform.isIOS || Platform.isMacOS) &&
+        _webViewController != null) {
+      return WebViewWidget(controller: _webViewController!);
+    }
+
+    // Windows — webview_windows (WebView2)
+    if (Platform.isWindows && _winWebViewReady && _winWebViewController != null) {
+      return wv_windows.Webview(_winWebViewController!);
+    }
+
+    // Linux — webf (QuickJS engine)
+    if (Platform.isLinux && _previewDir != null) {
+      final indexPath = p.join(_previewDir!, 'index.html');
+      return WebF.fromControllerName(
+        key: ValueKey('webf-preview-$_webfKey'),
+        controllerName: 'website-preview',
+        bundle: WebFBundle.fromUrl(Uri.file(indexPath).toString()),
+        forceLoad: true,
+        initialRoute: null,
+        loadingWidget: const Center(child: CircularProgressIndicator()),
+        errorBuilder: (context, error) => Center(
+          child: Text('Preview error: $error'),
+        ),
+      );
+    }
+
+    // Fallback: HtmlWidget (no JS support)
+    if (_htmlContent != null) {
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: HtmlWidget(
+          _htmlContent!,
+          baseUrl: Uri.file(widget.appPath + Platform.pathSeparator),
+          textStyle: Theme.of(context).textTheme.bodyMedium,
+        ),
+      );
+    }
+
+    return const Center(child: Text('Preview unavailable'));
   }
 }

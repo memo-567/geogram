@@ -31,6 +31,7 @@ import sqflite_darwin
 import sqlite3_flutter_libs
 import url_launcher_macos
 import wakelock_plus
+import webf
 import webview_flutter_wkwebview
 import window_manager
 
@@ -61,6 +62,7 @@ func RegisterGeneratedPlugins(registry: FlutterPluginRegistry) {
   Sqlite3FlutterLibsPlugin.register(with: registry.registrar(forPlugin: "Sqlite3FlutterLibsPlugin"))
   UrlLauncherPlugin.register(with: registry.registrar(forPlugin: "UrlLauncherPlugin"))
   WakelockPlusMacosPlugin.register(with: registry.registrar(forPlugin: "WakelockPlusMacosPlugin"))
+  WebFPlugin.register(with: registry.registrar(forPlugin: "WebFPlugin"))
   WebViewFlutterPlugin.register(with: registry.registrar(forPlugin: "WebViewFlutterPlugin"))
   WindowManagerPlugin.register(with: registry.registrar(forPlugin: "WindowManagerPlugin"))
 }

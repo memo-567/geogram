@@ -14,6 +14,9 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [BackupNotificationService](#backupnotificationservice) - Backup event notifications
 - [Notification Tap Handling Pattern](#notification-tap-handling-pattern) - Handle notification taps
 
+### Cross-Platform Patterns
+- [Platform-Adaptive WebView](#platform-adaptive-webview) - Render local HTML with JS on all platforms
+
 ### Viewer Pages
 - [PhotoViewerPage](#photoviewerpage) - Image & video gallery
 - [LocationPickerPage](#locationpickerpage) - Map location selection
@@ -3257,6 +3260,49 @@ The TTS service is also available via console commands:
 ---
 
 ## Patterns
+
+### Platform-Adaptive WebView
+
+**Files:**
+- `lib/pages/website_browser_page.dart` — `_buildPreviewContent()`, `_loadPreview()`
+- `lib/work/pages/websnapshot_viewer_page.dart` — `_useWebView`, `_extractAndLoad()`
+
+**Pattern:** Load HTML content using native WebView on each platform for full JS support:
+
+| Platform | Package | Widget |
+|----------|---------|--------|
+| Android / iOS / macOS | `webview_flutter` | `WebViewWidget(controller:)` |
+| Windows | `webview_windows` | `wv_windows.Webview(controller)` |
+| Linux | `webf` | `WebF.fromControllerName(bundle:)` |
+| Fallback | `flutter_widget_from_html_core` | `HtmlWidget(html)` (no JS) |
+
+```dart
+// Platform check + controller init pattern:
+if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
+  _webViewController ??= WebViewController()
+    ..setJavaScriptMode(JavaScriptMode.unrestricted)
+    ..setNavigationDelegate(NavigationDelegate(
+      onNavigationRequest: (r) => r.url.startsWith('file://')
+          ? NavigationDecision.navigate
+          : NavigationDecision.prevent,
+    ));
+  _webViewController!.loadFile(indexPath);
+} else if (Platform.isWindows) {
+  _winController ??= wv_windows.WebviewController();
+  await _winController!.initialize();
+  await _winController!.loadUrl(Uri.file(indexPath).toString());
+} else if (Platform.isLinux) {
+  // WebF uses widget-based API — increment key to force rebuild
+  WebFControllerManager.instance.initialize(const WebFControllerManagerConfig(
+    maxAliveInstances: 1, maxAttachedInstances: 1, enableDevTools: false,
+  ));
+  // Widget: WebF.fromControllerName(bundle: WebFBundle.fromUrl(Uri.file(path).toString()))
+}
+```
+
+**Encrypted storage**: When files are inside encrypted `ProfileStorage`, extract the entire folder to a temp directory first (using `listDirectory(recursive: true)` + `copyToExternal()`), then load from the temp path. Clean up in `dispose()`.
+
+**Reuse potential**: Any feature that needs to render local HTML with JavaScript support (website preview, web snapshots, HTML-based games, documentation viewers).
 
 ### Contact Nickname Map
 
