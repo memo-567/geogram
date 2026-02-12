@@ -105,8 +105,14 @@ echo "Symlink created: $BIN_DIR/geogram -> $BUNDLE_DIR/geogram"
 # ---------------------------------------------------------------------------
 # Update caches
 # ---------------------------------------------------------------------------
+# Ensure index.theme exists — gtk-update-icon-cache requires it
+if [ ! -f "$ICON_BASE/index.theme" ]; then
+    if [ -f /usr/share/icons/hicolor/index.theme ]; then
+        cp /usr/share/icons/hicolor/index.theme "$ICON_BASE/index.theme"
+    fi
+fi
 if command -v gtk-update-icon-cache &>/dev/null; then
-    gtk-update-icon-cache "$ICON_BASE" 2>/dev/null || true
+    gtk-update-icon-cache --force "$ICON_BASE" 2>/dev/null || true
 fi
 if command -v update-desktop-database &>/dev/null; then
     update-desktop-database "$APP_DIR" 2>/dev/null || true
