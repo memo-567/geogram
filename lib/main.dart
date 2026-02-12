@@ -2460,7 +2460,7 @@ class _AppsPageState extends State<AppsPage> {
                                                 app: appEntry,
                                               )
                                             : appEntry.type == 'email'
-                                            ? EmailBrowserPage()
+                                            ? EmailBrowserPage(app: appEntry)
                                             : appEntry.type == 'forum'
                                             ? ForumBrowserPage(
                                                 app: appEntry,
@@ -2732,7 +2732,7 @@ class _AppsPageState extends State<AppsPage> {
                                                 app: appEntry,
                                               )
                                             : appEntry.type == 'email'
-                                            ? EmailBrowserPage()
+                                            ? EmailBrowserPage(app: appEntry)
                                             : appEntry.type == 'forum'
                                             ? ForumBrowserPage(
                                                 app: appEntry,

@@ -93,9 +93,14 @@ class EmailService {
 
     if (_initialized) return;
 
-    await _ensureDirectoryStructure();
-    _initializedForCallsign = currentCallsign;
-    _initialized = true;
+    try {
+      await _ensureDirectoryStructure();
+      _initializedForCallsign = currentCallsign;
+      _initialized = true;
+    } catch (e) {
+      LogService().log('EmailService: initialization failed: $e');
+      rethrow;
+    }
   }
 
   /// Ensure base directory structure exists (unified folders)

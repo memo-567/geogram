@@ -7,8 +7,11 @@
 
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../models/app.dart';
 import '../models/email_thread.dart';
+import '../services/app_service.dart';
 import '../services/email_service.dart';
+import '../services/profile_storage.dart';
 import '../util/event_bus.dart';
 import 'email_thread_page.dart';
 import 'email_compose_page.dart';
@@ -27,6 +30,9 @@ enum EmailFolder {
 
 /// Email browser page with folder navigation and thread list
 class EmailBrowserPage extends StatefulWidget {
+  /// The email app entry (provides storagePath)
+  final App? app;
+
   /// Initial folder to display
   final EmailFolder initialFolder;
 
@@ -38,6 +44,7 @@ class EmailBrowserPage extends StatefulWidget {
 
   const EmailBrowserPage({
     super.key,
+    this.app,
     this.initialFolder = EmailFolder.inbox,
     this.initialStation,
     this.initialLabel,
@@ -203,12 +210,34 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
   }
 
   Future<void> _initialize() async {
-    await _emailService.initialize();
-    _emailSubscription = _emailService.onEmailChange.listen(_onEmailChange);
-    _notificationSubscription = EventBus().on<EmailNotificationEvent>(_onEmailNotification);
-    await _loadLabels();
-    await _loadFolderCounts();
-    await _loadThreads();
+    try {
+      // Set up ProfileStorage for the email app (same pattern as ChatBrowserPage)
+      final storagePath = widget.app?.storagePath;
+      if (storagePath != null) {
+        final profileStorage = AppService().profileStorage;
+        if (profileStorage != null) {
+          final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+            profileStorage, storagePath);
+          _emailService.setStorage(scopedStorage);
+        } else {
+          _emailService.setStorage(FilesystemProfileStorage(storagePath));
+        }
+      }
+
+      await _emailService.initialize();
+      _emailSubscription = _emailService.onEmailChange.listen(_onEmailChange);
+      _notificationSubscription = EventBus().on<EmailNotificationEvent>(_onEmailNotification);
+      await _loadLabels();
+      await _loadFolderCounts();
+      await _loadThreads();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = 'Failed to initialize email: $e';
+          _isLoading = false;
+        });
+      }
+    }
   }
 
   Future<void> _loadFolderCounts() async {
