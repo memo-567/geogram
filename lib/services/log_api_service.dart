@@ -11735,7 +11735,21 @@ class LogApiService {
       }
 
       // Read blog post directly from storage (no BlogService needed)
-      final blogStorage = FilesystemProfileStorage('$dataDir/devices/$callsign');
+      final ProfileStorage blogStorage;
+      if (deviceCallsign != null && deviceCallsign.isNotEmpty) {
+        // Proxy case: serving another device's blog (unencrypted access)
+        blogStorage = FilesystemProfileStorage('$dataDir/devices/$deviceCallsign');
+      } else {
+        // Own blog: use ProfileStorage (handles encrypted or plain)
+        final storage = AppService().profileStorage;
+        if (storage == null) {
+          return shelf.Response.internalServerError(
+            body: '<html><body><h1>500 Internal Server Error</h1><p>Storage not available</p></body></html>',
+            headers: {'Content-Type': 'text/html'},
+          );
+        }
+        blogStorage = storage;
+      }
       final year = filename.length >= 4 ? filename.substring(0, 4) : '';
       final postRelativePath = 'blog/$year/$filename';
       final postContent = await blogStorage.readString('$postRelativePath/post.md');
