@@ -1,8 +1,8 @@
 #!/bin/bash
 # Geogram — Install desktop integration (no root required)
 #
-# Installs icons, .desktop file, and optional terminal symlink into
-# the user's XDG directories so the desktop environment can find
+# Installs icons, .desktop file, autostart entry, and terminal symlink
+# into the user's XDG directories so the desktop environment can find
 # Geogram's icon in the taskbar, alt-tab, and app launcher.
 #
 # If you move this folder, re-run this script.
@@ -14,11 +14,10 @@ APP_NAME="Geogram"
 
 # ---------------------------------------------------------------------------
 # Resolve the bundle directory (works regardless of CWD or symlinks)
+# The script lives at the bundle root, next to the geogram binary.
 # ---------------------------------------------------------------------------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUNDLE_DIR="$SCRIPT_DIR"
+BUNDLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Sanity check: the main binary must be next to us
 if [ ! -x "$BUNDLE_DIR/geogram" ]; then
     echo "Error: Cannot find geogram binary at $BUNDLE_DIR/geogram"
     echo "Make sure this script is inside the bundle directory."
@@ -49,7 +48,6 @@ for SIZE in 48 64 128 256 512; do
     fi
 done
 
-# Scalable SVG
 SRC_SVG="$ICON_SRC/scalable/${APP_ID}.svg"
 if [ -f "$SRC_SVG" ]; then
     mkdir -p "$ICON_BASE/scalable/apps"
@@ -74,9 +72,9 @@ Keywords=geo;geogram;chat;mesh;radio;offline;
 Terminal=false
 StartupWMClass=$APP_ID
 EOF
-
 chmod +x "$APP_DIR/${APP_ID}.desktop"
-echo "Desktop entry installed: $APP_DIR/${APP_ID}.desktop"
+
+echo "Desktop entry installed."
 
 # ---------------------------------------------------------------------------
 # Enable autostart on login
@@ -91,21 +89,22 @@ Icon=$APP_ID
 X-GNOME-Autostart-enabled=true
 StartupWMClass=$APP_ID
 EOF
-
 chmod +x "$AUTOSTART_DIR/${APP_ID}.desktop"
-echo "Autostart enabled: $AUTOSTART_DIR/${APP_ID}.desktop"
+
+echo "Autostart enabled."
 
 # ---------------------------------------------------------------------------
 # Create symlink in ~/.local/bin for terminal access
 # ---------------------------------------------------------------------------
 mkdir -p "$BIN_DIR"
 ln -sf "$BUNDLE_DIR/geogram" "$BIN_DIR/geogram"
-echo "Symlink created: $BIN_DIR/geogram -> $BUNDLE_DIR/geogram"
+echo "Terminal command: geogram"
 
 # ---------------------------------------------------------------------------
 # Update caches
+# gtk-update-icon-cache requires an index.theme file to exist.
+# If the user's local hicolor theme lacks one, copy it from the system.
 # ---------------------------------------------------------------------------
-# Ensure index.theme exists — gtk-update-icon-cache requires it
 if [ ! -f "$ICON_BASE/index.theme" ]; then
     if [ -f /usr/share/icons/hicolor/index.theme ]; then
         cp /usr/share/icons/hicolor/index.theme "$ICON_BASE/index.theme"
