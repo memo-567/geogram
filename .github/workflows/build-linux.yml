@@ -42,7 +42,7 @@ jobs:
     - name: Install Linux dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libmpv-dev
+        sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libmpv-dev lld
 
     - name: Enable Linux desktop
       run: flutter config --enable-linux-desktop
