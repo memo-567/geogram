@@ -391,12 +391,29 @@ class EmailRelayService {
       return threadContent; // Fallback to raw content
     }
 
-    // Concatenate all message contents (chronological order)
     final buffer = StringBuffer();
+
+    // Clean message content
     for (int i = 0; i < thread.messages.length; i++) {
       if (i > 0) buffer.write('\n\n---\n\n');
       buffer.write(thread.messages[i].content);
     }
+
+    // Append signature verification block if any message has signing metadata
+    final hasSigningMetadata = thread.messages.any((m) =>
+        m.hasMeta('event_id') || m.hasMeta('npub') || m.hasMeta('signature'));
+
+    if (hasSigningMetadata) {
+      buffer.write('\n\n\n--------------\n');
+      buffer.writeln(
+          'Signature verification for NOSTR, you can ignore the text below.');
+      buffer.writeln('--------------');
+      for (int i = 0; i < thread.messages.length; i++) {
+        if (i > 0) buffer.write('\n');
+        buffer.write(thread.messages[i].exportAsText());
+      }
+    }
+
     return buffer.toString();
   }
 
