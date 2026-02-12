@@ -201,6 +201,7 @@ class FileFolderPickerState extends State<FileFolderPicker> {
   bool _isVirtualFolder = false;
   String? _virtualFolderType;
   bool _isDragOver = false;
+  String? _dragTargetPath;  // path of folder currently hovered during internal drag
   bool _isImporting = false;
   int _importTotal = 0;
   int _importProgress = 0;
@@ -1520,9 +1521,11 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     return true;
   }
 
-  Widget _buildParentDirListItem(ThemeData theme) {
+  Widget _buildParentDirListItem(ThemeData theme, {bool isDropTarget = false}) {
     return Material(
-      color: Colors.transparent,
+      color: isDropTarget
+          ? theme.colorScheme.primaryContainer.withValues(alpha: 0.5)
+          : Colors.transparent,
       child: InkWell(
         onTap: _navigateUp,
         child: Padding(
@@ -1544,32 +1547,114 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     );
   }
 
-  Widget _buildParentDirGridItem(ThemeData theme) {
-    return Material(
-      color: theme.colorScheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(12),
-      child: InkWell(
-        onTap: _navigateUp,
+  Widget _buildParentDirGridItem(ThemeData theme, {bool isDropTarget = false}) {
+    return Container(
+      decoration: isDropTarget
+          ? BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: theme.colorScheme.primary,
+                width: 2,
+              ),
+            )
+          : null,
+      child: Material(
+        color: theme.colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(12),
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _buildIconBox(Icons.folder_rounded, Colors.amber.shade700, 48),
-                const SizedBox(height: 6),
-                Text(
-                  '..',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    fontWeight: FontWeight.w500,
+        child: InkWell(
+          onTap: _navigateUp,
+          borderRadius: BorderRadius.circular(12),
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _buildIconBox(Icons.folder_rounded, Colors.amber.shade700, 48),
+                  const SizedBox(height: 6),
+                  Text(
+                    '..',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildDragFeedback(FileSystemItem item, ThemeData theme) {
+    return Material(
+      elevation: 4,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(_getItemIcon(item), size: 20, color: _getIconColor(item)),
+            const SizedBox(width: 8),
+            Text(item.name, style: theme.textTheme.bodyMedium),
+          ],
+        ),
+      ),
+    );
+  }
+
+  bool get _canDragItems =>
+      !_isVirtualFolder && !_isImporting;
+
+  Widget _wrapWithDrag(Widget child, FileSystemItem item, ThemeData theme) {
+    if (!_canDragItems) return child;
+    // In non-explorer mode, disable dragging so long-press selection works
+    if (!widget.explorerMode) return child;
+    final feedback = _buildDragFeedback(item, theme);
+    if (Platform.isAndroid) {
+      return LongPressDraggable<FileSystemItem>(
+        data: item,
+        feedback: feedback,
+        childWhenDragging: Opacity(opacity: 0.5, child: child),
+        child: child,
+      );
+    }
+    return Draggable<FileSystemItem>(
+      data: item,
+      feedback: feedback,
+      childWhenDragging: Opacity(opacity: 0.5, child: child),
+      child: child,
+    );
+  }
+
+  Widget _wrapWithDropTarget(Widget child, String targetPath) {
+    if (!_canDragItems) return child;
+    return DragTarget<FileSystemItem>(
+      onWillAcceptWithDetails: (details) {
+        final item = details.data;
+        // Don't accept drop on self
+        if (item.path == targetPath) return false;
+        // Don't accept drop into own subtree
+        if (item.isDirectory && p.isWithin(item.path, targetPath)) return false;
+        return true;
+      },
+      onAcceptWithDetails: (details) {
+        setState(() => _dragTargetPath = null);
+        _moveItemToFolder(details.data, targetPath);
+      },
+      onMove: (_) {
+        if (_dragTargetPath != targetPath) {
+          setState(() => _dragTargetPath = targetPath);
+        }
+      },
+      onLeave: (_) {
+        if (_dragTargetPath == targetPath) {
+          setState(() => _dragTargetPath = null);
+        }
+      },
+      builder: (context, candidateData, rejectedData) => child,
     );
   }
 
@@ -1580,10 +1665,20 @@ class FileFolderPickerState extends State<FileFolderPicker> {
       itemCount: _items.length + (hasParent ? 1 : 0),
       itemBuilder: (context, index) {
         if (hasParent && index == 0) {
-          return _buildParentDirListItem(theme);
+          final parentWidget = _buildParentDirListItem(theme,
+            isDropTarget: _dragTargetPath == _currentDirectory.parent.path,
+          );
+          return _wrapWithDropTarget(parentWidget, _currentDirectory.parent.path);
         }
         final item = _items[hasParent ? index - 1 : index];
-        return _buildListItem(item, theme);
+        Widget itemWidget = _buildListItem(item, theme,
+          isDropTarget: item.isDirectory && _dragTargetPath == item.path,
+        );
+        itemWidget = _wrapWithDrag(itemWidget, item, theme);
+        if (item.isDirectory) {
+          itemWidget = _wrapWithDropTarget(itemWidget, item.path);
+        }
+        return itemWidget;
       },
     );
   }
@@ -1601,22 +1696,34 @@ class FileFolderPickerState extends State<FileFolderPicker> {
       itemCount: _items.length + (hasParent ? 1 : 0),
       itemBuilder: (context, index) {
         if (hasParent && index == 0) {
-          return _buildParentDirGridItem(theme);
+          final parentWidget = _buildParentDirGridItem(theme,
+            isDropTarget: _dragTargetPath == _currentDirectory.parent.path,
+          );
+          return _wrapWithDropTarget(parentWidget, _currentDirectory.parent.path);
         }
         final item = _items[hasParent ? index - 1 : index];
-        return _buildGridItem(item, theme);
+        Widget itemWidget = _buildGridItem(item, theme,
+          isDropTarget: item.isDirectory && _dragTargetPath == item.path,
+        );
+        itemWidget = _wrapWithDrag(itemWidget, item, theme);
+        if (item.isDirectory) {
+          itemWidget = _wrapWithDropTarget(itemWidget, item.path);
+        }
+        return itemWidget;
       },
     );
   }
 
-  Widget _buildListItem(FileSystemItem item, ThemeData theme) {
+  Widget _buildListItem(FileSystemItem item, ThemeData theme, {bool isDropTarget = false}) {
     final isSelected = _selectedPaths.contains(item.path);
     final isExplorer = widget.explorerMode;
 
     return Material(
-      color: isSelected
-          ? theme.colorScheme.primaryContainer.withValues(alpha: 0.4)
-          : Colors.transparent,
+      color: isDropTarget
+          ? theme.colorScheme.primaryContainer.withValues(alpha: 0.5)
+          : isSelected
+              ? theme.colorScheme.primaryContainer.withValues(alpha: 0.4)
+              : Colors.transparent,
       child: InkWell(
         onTap: () {
           if (item.isDirectory) {
@@ -1714,7 +1821,7 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     );
   }
 
-  Widget _buildGridItem(FileSystemItem item, ThemeData theme) {
+  Widget _buildGridItem(FileSystemItem item, ThemeData theme, {bool isDropTarget = false}) {
     final isSelected = _selectedPaths.contains(item.path);
     final hasThumbnail = _isImageFile(item.name) || _isVideoFile(item.name);
     final isExplorer = widget.explorerMode;
@@ -1857,16 +1964,26 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     }
 
     // For folders and other files: keep the centered icon layout
-    return Material(
-      color: isSelected
-          ? theme.colorScheme.primaryContainer
-          : theme.colorScheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(12),
-      child: InkWell(
-        onTap: onItemTap,
-        onLongPress: isExplorer ? null : () => _toggleSelection(item),
+    return Container(
+      decoration: isDropTarget
+          ? BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: theme.colorScheme.primary,
+                width: 2,
+              ),
+            )
+          : null,
+      child: Material(
+        color: isSelected
+            ? theme.colorScheme.primaryContainer
+            : theme.colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(12),
-        child: Stack(
+        child: InkWell(
+          onTap: onItemTap,
+          onLongPress: isExplorer ? null : () => _toggleSelection(item),
+          borderRadius: BorderRadius.circular(12),
+          child: Stack(
           children: [
             // Content centered
             Center(
@@ -1932,7 +2049,8 @@ class FileFolderPickerState extends State<FileFolderPicker> {
                   ),
                 ),
               ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -2425,6 +2543,123 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     }
     setState(() => _clipboardItems.clear());
     _loadDirectory();
+  }
+
+  // ============ Internal Drag & Drop Move ============
+
+  Future<void> _moveItemToFolder(FileSystemItem item, String targetDir) async {
+    // Reject if already in that folder
+    if (p.dirname(item.path) == targetDir) return;
+
+    // Reject moving a directory into its own subtree
+    if (item.isDirectory && p.isWithin(item.path, targetDir)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Cannot move a folder into itself')),
+        );
+      }
+      return;
+    }
+
+    final name = item.name;
+    final destPath = p.join(targetDir, name);
+
+    try {
+      if (_isInsideProfileStorage()) {
+        await _moveItemInStorage(item, targetDir);
+      } else {
+        // Check for name conflict
+        final exists = item.isDirectory
+            ? await Directory(destPath).exists()
+            : await File(destPath).exists();
+        if (exists) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('A file with this name already exists')),
+            );
+          }
+          return;
+        }
+        // Atomic rename (move) on same filesystem
+        if (item.isDirectory) {
+          await Directory(item.path).rename(destPath);
+        } else {
+          await File(item.path).rename(destPath);
+        }
+      }
+      _selectedPaths.remove(item.path);
+      _loadDirectory();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Move failed: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _moveItemInStorage(FileSystemItem item, String targetDir) async {
+    final storage = widget.profileStorage!;
+    final basePath = storage.basePath;
+
+    final srcRelative = p.relative(item.path, from: basePath);
+    final targetRelativeDir = targetDir == basePath
+        ? ''
+        : p.relative(targetDir, from: basePath);
+    final destRelative = targetRelativeDir.isEmpty
+        ? item.name
+        : '$targetRelativeDir/${item.name}';
+
+    // Check for name conflict
+    final exists = item.isDirectory
+        ? await storage.directoryExists(destRelative)
+        : await storage.exists(destRelative);
+    if (exists) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('A file with this name already exists')),
+        );
+      }
+      return;
+    }
+
+    if (item.isDirectory) {
+      await _moveDirectoryInStorage(storage, srcRelative, destRelative);
+    } else {
+      final bytes = await storage.readBytes(srcRelative);
+      if (bytes != null) {
+        await storage.writeBytes(destRelative, bytes);
+      }
+      await storage.delete(srcRelative);
+    }
+  }
+
+  Future<void> _moveDirectoryInStorage(
+    ProfileStorage storage,
+    String srcRelative,
+    String destRelative,
+  ) async {
+    await storage.createDirectory(destRelative);
+    final entries = await storage.listDirectory(srcRelative);
+    for (final entry in entries) {
+      final childName = p.basename(entry.path);
+      final childSrc = srcRelative.isEmpty
+          ? childName
+          : '$srcRelative/$childName';
+      final childDest = destRelative.isEmpty
+          ? childName
+          : '$destRelative/$childName';
+      if (entry.isDirectory) {
+        await _moveDirectoryInStorage(storage, childSrc, childDest);
+      } else {
+        final bytes = await storage.readBytes(childSrc);
+        if (bytes != null) {
+          await storage.writeBytes(childDest, bytes);
+        }
+        await storage.delete(childSrc);
+      }
+    }
+    await storage.deleteDirectory(srcRelative);
   }
 
   // ============ OS Drag & Drop ============

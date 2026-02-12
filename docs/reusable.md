@@ -310,6 +310,7 @@ A professional file and folder picker widget with rich features.
 - Show/hide hidden files toggle
 - Breadcrumb navigation
 - OS-level drag & drop: drop files from Nemo/Explorer into the widget
+- Internal drag & drop: move files/folders between directories (desktop click-drag, mobile long-press-drag)
 - OS clipboard paste: Ctrl+V pastes files copied in Nemo/Nautilus/Dolphin/Explorer
 - OS clipboard copy: Ctrl+C copies selected files to system clipboard for pasting in file managers
 - Import progress overlay with per-file progress bar
