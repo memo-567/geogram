@@ -269,9 +269,8 @@ class AppService {
         return;
       }
 
-      // Get styles
-      final globalStyles = await themeService.getGlobalStyles() ?? '';
-      final appStyles = await themeService.getAppStyles('www') ?? '';
+      // Get combined styles for external stylesheet
+      final combinedStyles = await themeService.getCombinedStyles('www');
 
       // Use callsign as the display name
       final displayName = _currentCallsign ?? 'My Website';
@@ -331,8 +330,7 @@ class AppService {
       // Process template with dynamic content
       final html = themeService.processTemplate(template, {
         'TITLE': displayName,
-        'GLOBAL_STYLES': globalStyles,
-        'APP_STYLES': appStyles,
+        'COLLECTION_NAME': displayName,
         'APP_NAME': displayName,
         'APP_DESCRIPTION': description,
         'CONTENT': contentBuffer.toString(),
@@ -341,15 +339,18 @@ class AppService {
         'GENERATED_DATE': DateTime.now().toIso8601String(),
       });
 
-      // Write index.html to the app folder via ProfileStorage
+      // Write index.html and styles.css to the app folder via ProfileStorage
       if (_profileStorage != null && app.storagePath != null) {
         final appStorage = ScopedProfileStorage.fromAbsolutePath(_profileStorage!, app.storagePath!);
         await appStorage.writeString('index.html', html);
-        stderr.writeln('Generated default www index.html: ${app.storagePath}/index.html');
+        await appStorage.writeString('styles.css', combinedStyles);
+        stderr.writeln('Generated default www index.html + styles.css: ${app.storagePath}');
       } else {
         final indexFile = File('${app.storagePath}/index.html');
         await indexFile.writeAsString(html);
-        stderr.writeln('Generated default www index.html: ${indexFile.path}');
+        final stylesFile = File('${app.storagePath}/styles.css');
+        await stylesFile.writeAsString(combinedStyles);
+        stderr.writeln('Generated default www index.html + styles.css: ${app.storagePath}');
       }
     } catch (e) {
       stderr.writeln('Error generating default www index.html: $e');
