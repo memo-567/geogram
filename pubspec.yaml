@@ -94,6 +94,7 @@ dependencies:
   qr_flutter: ^4.1.0             # QR code generation for contact sharing
   flutter_zxing: ^1.8.0          # QR code scanning using ZXing (F-Droid compatible, no Google deps)
   whisper_flutter_new: ^1.0.1    # Offline speech-to-text using Whisper (Android/iOS/macOS)
+  desktop_drop: ^0.5.0            # OS-level drag & drop support for desktop platforms
   share_plus: ^10.1.4            # Native share sheet for sharing images and files
   highlighting: ^0.9.0+11.8.0    # Dart port of highlight.js (190+ languages)
   flutter_highlighting: ^0.9.0+11.8.0  # Flutter themes for highlighting package

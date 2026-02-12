@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
@@ -199,6 +200,11 @@ class FileFolderPickerState extends State<FileFolderPicker> {
   final ScrollController _breadcrumbScrollController = ScrollController();
   bool _isVirtualFolder = false;
   String? _virtualFolderType;
+  bool _isDragOver = false;
+  bool _isImporting = false;
+  int _importTotal = 0;
+  int _importProgress = 0;
+  String? _importCurrentFile;
 
   @override
   void initState() {
@@ -1055,10 +1061,38 @@ class FileFolderPickerState extends State<FileFolderPicker> {
         focusNode: _keyboardFocusNode,
         autofocus: true,
         onKeyEvent: (node, event) {
-          if (event is KeyDownEvent &&
-              event.logicalKey == LogicalKeyboardKey.backspace) {
-            _navigateUp();
-            return KeyEventResult.handled;
+          if (event is KeyDownEvent) {
+            if (event.logicalKey == LogicalKeyboardKey.backspace) {
+              _navigateUp();
+              return KeyEventResult.handled;
+            }
+            final isCtrl = HardwareKeyboard.instance.isControlPressed;
+            if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyV) {
+              _pasteFromSystemClipboard();
+              return KeyEventResult.handled;
+            }
+            if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyC &&
+                _selectedPaths.isNotEmpty) {
+              final selected = _items
+                  .where((i) => _selectedPaths.contains(i.path))
+                  .toList();
+              if (selected.isNotEmpty) {
+                setState(() {
+                  _clipboardItems
+                    ..clear()
+                    ..addAll(selected);
+                });
+                _copyToSystemClipboard(selected);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(selected.length == 1
+                        ? '${selected.first.name} copied'
+                        : '${selected.length} items copied'),
+                  ),
+                );
+              }
+              return KeyEventResult.handled;
+            }
           }
           return KeyEventResult.ignored;
         },
@@ -1095,15 +1129,27 @@ class FileFolderPickerState extends State<FileFolderPicker> {
 
           // File list
           Expanded(
-            child: _isLoading
-                ? _buildLoadingState(theme)
-                : _error != null
-                    ? _buildErrorState(theme)
-                    : _items.isEmpty
-                        ? _buildEmptyState(theme)
-                        : _isGridView
-                            ? _buildGridView(theme)
-                            : _buildListView(theme),
+            child: DropTarget(
+              onDragDone: _onDropDone,
+              onDragEntered: (_) => setState(() => _isDragOver = true),
+              onDragExited: (_) => setState(() => _isDragOver = false),
+              enable: !_isImporting,
+              child: Stack(
+                children: [
+                  _isLoading
+                      ? _buildLoadingState(theme)
+                      : _error != null
+                          ? _buildErrorState(theme)
+                          : _items.isEmpty
+                              ? _buildEmptyState(theme)
+                              : _isGridView
+                                  ? _buildGridView(theme)
+                                  : _buildListView(theme),
+                  if (_isDragOver) _buildDropOverlay(theme),
+                  if (_isImporting) _buildImportProgressOverlay(theme),
+                ],
+              ),
+            ),
           ),
 
           // Status bar
@@ -2206,6 +2252,20 @@ class FileFolderPickerState extends State<FileFolderPicker> {
       } catch (_) {
         // xclip not available — ignore silently
       }
+    } else if (Platform.isWindows) {
+      final paths = items.map((i) => i.path).toList();
+      final script = StringBuffer()
+        ..writeln('Add-Type -AssemblyName System.Windows.Forms')
+        ..writeln('\$col = New-Object System.Collections.Specialized.StringCollection');
+      for (final path in paths) {
+        script.writeln('\$col.Add("${path.replaceAll('"', '`"')}")');
+      }
+      script.writeln('[System.Windows.Forms.Clipboard]::SetFileDropList(\$col)');
+      try {
+        await Process.run('powershell', ['-NoProfile', '-Command', script.toString()]);
+      } catch (_) {
+        // PowerShell not available — ignore silently
+      }
     }
   }
 
@@ -2238,6 +2298,13 @@ class FileFolderPickerState extends State<FileFolderPicker> {
   }
 
   Future<void> _pasteItems() async {
+    if (_isInsideProfileStorage()) {
+      // Use ProfileStorage-aware import for items pasted into encrypted storage
+      final paths = _clipboardItems.map((i) => i.path).toList();
+      setState(() => _clipboardItems.clear());
+      await _importExternalPaths(paths);
+      return;
+    }
     for (final item in _clipboardItems) {
       final destPath = await _resolveDestPath(
         _currentDirectory.path,
@@ -2261,6 +2328,325 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     }
     setState(() => _clipboardItems.clear());
     _loadDirectory();
+  }
+
+  // ============ OS Drag & Drop ============
+
+  void _onDropDone(DropDoneDetails details) {
+    if (_isVirtualFolder) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cannot import files to a virtual folder')),
+      );
+      return;
+    }
+    final paths = details.files
+        .map((f) => f.path)
+        .where((path) => path.isNotEmpty)
+        .toList();
+    if (paths.isEmpty) return;
+    _importExternalPaths(paths);
+  }
+
+  Future<void> _importExternalPaths(List<String> externalPaths) async {
+    if (externalPaths.isEmpty) return;
+
+    setState(() {
+      _isImporting = true;
+      _importTotal = externalPaths.length;
+      _importProgress = 0;
+      _importCurrentFile = null;
+    });
+
+    int successes = 0;
+    int failures = 0;
+
+    for (final externalPath in externalPaths) {
+      final name = p.basename(externalPath);
+      setState(() {
+        _importProgress++;
+        _importCurrentFile = name;
+      });
+
+      try {
+        if (_isInsideProfileStorage()) {
+          await _importToProfileStorage(externalPath, name);
+        } else {
+          await _importToFilesystem(externalPath, name);
+        }
+        successes++;
+      } catch (e) {
+        failures++;
+      }
+    }
+
+    setState(() {
+      _isImporting = false;
+      _importCurrentFile = null;
+    });
+
+    if (mounted) {
+      final msg = failures == 0
+          ? 'Imported $successes ${successes == 1 ? 'item' : 'items'}'
+          : 'Imported $successes, failed $failures';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg)),
+      );
+    }
+
+    _loadDirectory();
+  }
+
+  Future<void> _importToProfileStorage(String externalPath, String name) async {
+    final storage = widget.profileStorage!;
+    final basePath = storage.basePath;
+    final dirPath = _currentDirectory.path;
+    final parentRelative = dirPath == basePath
+        ? ''
+        : p.relative(dirPath, from: basePath);
+
+    final entityType = await FileSystemEntity.type(externalPath);
+    final isDirectory = entityType == FileSystemEntityType.directory;
+    final destRelative = await _resolveDestPathInStorage(
+      storage, parentRelative, name, isDirectory,
+    );
+
+    if (isDirectory) {
+      await _importDirectoryToStorage(storage, externalPath, destRelative);
+    } else {
+      await storage.copyFromExternal(externalPath, destRelative);
+    }
+  }
+
+  Future<void> _importDirectoryToStorage(
+    ProfileStorage storage,
+    String externalDirPath,
+    String storageRelative,
+  ) async {
+    await storage.createDirectory(storageRelative);
+    final dir = Directory(externalDirPath);
+    await for (final entity in dir.list()) {
+      final childName = p.basename(entity.path);
+      final childRelative = storageRelative.isEmpty
+          ? childName
+          : '$storageRelative/$childName';
+      if (entity is Directory) {
+        await _importDirectoryToStorage(storage, entity.path, childRelative);
+      } else if (entity is File) {
+        await storage.copyFromExternal(entity.path, childRelative);
+      }
+    }
+  }
+
+  Future<void> _importToFilesystem(String externalPath, String name) async {
+    final entityType = await FileSystemEntity.type(externalPath);
+    final isDirectory = entityType == FileSystemEntityType.directory;
+    final destPath = await _resolveDestPath(
+      _currentDirectory.path, name, isDirectory,
+    );
+    if (isDirectory) {
+      await _copyDirectory(Directory(externalPath), Directory(destPath));
+    } else {
+      await File(externalPath).copy(destPath);
+    }
+  }
+
+  Future<String> _resolveDestPathInStorage(
+    ProfileStorage storage,
+    String parentRelative,
+    String name,
+    bool isDirectory,
+  ) async {
+    var destRelative = parentRelative.isEmpty ? name : '$parentRelative/$name';
+    final existsCheck = isDirectory
+        ? await storage.directoryExists(destRelative)
+        : await storage.exists(destRelative);
+    if (!existsCheck) return destRelative;
+
+    final ext = isDirectory ? '' : p.extension(name);
+    final base = isDirectory ? name : p.basenameWithoutExtension(name);
+    var counter = 1;
+    do {
+      final suffix = counter == 1 ? ' (copy)' : ' (copy $counter)';
+      destRelative = parentRelative.isEmpty
+          ? '$base$suffix$ext'
+          : '$parentRelative/$base$suffix$ext';
+      counter++;
+    } while (isDirectory
+        ? await storage.directoryExists(destRelative)
+        : await storage.exists(destRelative));
+    return destRelative;
+  }
+
+  // ============ System Clipboard File Read ============
+
+  Future<void> _pasteFromSystemClipboard() async {
+    if (_isVirtualFolder) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cannot import files to a virtual folder')),
+      );
+      return;
+    }
+
+    List<String>? paths;
+    if (Platform.isLinux) {
+      paths = await _readLinuxClipboardFiles();
+    } else if (Platform.isWindows) {
+      paths = await _readWindowsClipboardFiles();
+    }
+
+    if (paths != null && paths.isNotEmpty) {
+      await _importExternalPaths(paths);
+    } else if (_clipboardItems.isNotEmpty) {
+      // Fall back to internal paste
+      await _pasteItems();
+    }
+  }
+
+  Future<List<String>?> _readLinuxClipboardFiles() async {
+    // Try GNOME/Nemo format first: x-special/gnome-copied-files
+    try {
+      final result = await Process.run(
+        'xclip',
+        ['-selection', 'clipboard', '-t', 'x-special/gnome-copied-files', '-o'],
+      );
+      if (result.exitCode == 0) {
+        final content = (result.stdout as String).trim();
+        if (content.startsWith('copy\n') || content.startsWith('cut\n')) {
+          final lines = content.split('\n').skip(1);
+          final paths = <String>[];
+          for (final line in lines) {
+            final trimmed = line.trim();
+            if (trimmed.isEmpty) continue;
+            try {
+              paths.add(Uri.parse(trimmed).toFilePath());
+            } catch (_) {}
+          }
+          if (paths.isNotEmpty) return paths;
+        }
+      }
+    } catch (_) {}
+
+    // Fallback: text/uri-list (KDE/Dolphin)
+    try {
+      final result = await Process.run(
+        'xclip',
+        ['-selection', 'clipboard', '-t', 'text/uri-list', '-o'],
+      );
+      if (result.exitCode == 0) {
+        final content = (result.stdout as String).trim();
+        final paths = <String>[];
+        for (final line in content.split('\n')) {
+          final trimmed = line.trim();
+          if (trimmed.isEmpty || trimmed.startsWith('#')) continue;
+          try {
+            paths.add(Uri.parse(trimmed).toFilePath());
+          } catch (_) {}
+        }
+        if (paths.isNotEmpty) return paths;
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
+  Future<List<String>?> _readWindowsClipboardFiles() async {
+    try {
+      final result = await Process.run('powershell', [
+        '-NoProfile',
+        '-Command',
+        r"Get-Clipboard -Format FileDropList | ForEach-Object { $_.FullName }",
+      ]);
+      if (result.exitCode == 0) {
+        final content = (result.stdout as String).trim();
+        if (content.isNotEmpty) {
+          return content.split('\n').map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  // ============ Visual Overlays ============
+
+  Widget _buildDropOverlay(ThemeData theme) {
+    return IgnorePointer(
+      child: Container(
+        color: theme.colorScheme.primary.withValues(alpha: 0.15),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.download_rounded,
+                size: 48,
+                color: theme.colorScheme.primary,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Drop files here to import',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  color: theme.colorScheme.primary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              if (_isInsideProfileStorage() &&
+                  widget.profileStorage?.isEncrypted == true) ...[
+                const SizedBox(height: 4),
+                Text(
+                  'Files will be encrypted',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.primary,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildImportProgressOverlay(ThemeData theme) {
+    final progress = _importTotal > 0 ? _importProgress / _importTotal : 0.0;
+    return IgnorePointer(
+      child: Container(
+        color: theme.colorScheme.surface.withValues(alpha: 0.85),
+        child: Center(
+          child: Card(
+            elevation: 8,
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 48,
+                    height: 48,
+                    child: CircularProgressIndicator(value: progress),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Importing $_importProgress of $_importTotal',
+                    style: theme.textTheme.titleSmall,
+                  ),
+                  if (_importCurrentFile != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      _importCurrentFile!,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   void _deleteItem(FileSystemItem item) {

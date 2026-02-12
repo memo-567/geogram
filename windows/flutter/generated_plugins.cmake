@@ -4,6 +4,7 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   ble_peripheral
+  desktop_drop
   file_selector_windows
   flutter_onnxruntime
   flutter_webrtc
