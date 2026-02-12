@@ -524,6 +524,49 @@ class _WebsiteBrowserPageState extends State<WebsiteBrowserPage>
     }
   }
 
+  Future<void> _regenerateTemplate() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Regenerate template?'),
+        content: const Text(
+          'This will overwrite index.html and styles.css with the '
+          'default generated template. Any manual edits to those '
+          'files will be lost.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Regenerate'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    try {
+      final app = AppService().getAppByType('www');
+      if (app == null) throw Exception('www app not found');
+      await AppService().generateDefaultWwwIndex(app);
+      _pickerKey.currentState?.refresh();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Template regenerated')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to regenerate template: $e')),
+        );
+      }
+    }
+  }
+
   Future<void> _openExternal(String path) async {
     final uri = Uri.file(path);
     if (await canLaunchUrl(uri)) {
@@ -550,7 +593,14 @@ class _WebsiteBrowserPageState extends State<WebsiteBrowserPage>
           ],
         ),
         actions: isFilesTab
-            ? _pickerKey.currentState?.buildActions()
+            ? [
+                IconButton(
+                  icon: const Icon(Icons.restart_alt),
+                  tooltip: 'Regenerate template',
+                  onPressed: _regenerateTemplate,
+                ),
+                ...?_pickerKey.currentState?.buildActions(),
+              ]
             : null,
       ),
       body: Column(

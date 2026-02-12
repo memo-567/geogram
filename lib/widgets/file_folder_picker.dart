@@ -809,6 +809,9 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     });
   }
 
+  /// Reload the current directory listing.
+  void refresh() => _loadDirectory();
+
   /// Programmatically select a single file by its absolute path,
   /// highlighting it in the tree view.
   void selectFile(String path) {
