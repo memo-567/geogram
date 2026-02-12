@@ -111,7 +111,7 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
           Text(
             subtitle,
             style: theme.textTheme.labelMedium?.copyWith(
-              color: theme.colorScheme.onSurface.withOpacity(0.7),
+              color: theme.colorScheme.onSurface.withValues(alpha:0.7),
             ),
           ),
         ],
@@ -543,7 +543,7 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
 
         return Scaffold(
           key: _scaffoldKey,
-          backgroundColor: theme.colorScheme.surfaceVariant.withOpacity(0.25),
+          backgroundColor: theme.colorScheme.surfaceVariant.withValues(alpha:0.25),
           appBar: _buildAppBar(theme),
           floatingActionButton: FloatingActionButton.extended(
             onPressed: _composeEmail,
@@ -672,7 +672,7 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
                 onPressed: () => _scaffoldKey.currentState?.openDrawer(),
                 tooltip: 'Folders',
               ),
-            Icon(Icons.search, color: theme.colorScheme.onSurface.withOpacity(0.7)),
+            Icon(Icons.search, color: theme.colorScheme.onSurface.withValues(alpha:0.7)),
             const SizedBox(width: 8),
             Expanded(
               child: TextField(
@@ -822,7 +822,7 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
         color: theme.colorScheme.surface,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha:0.05),
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),
@@ -1225,9 +1225,9 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
     return Container(
       padding: padding,
       decoration: BoxDecoration(
-        color: color.withOpacity(0.15),
+        color: color.withValues(alpha:0.15),
         borderRadius: BorderRadius.circular(radius),
-        border: Border.all(color: color.withOpacity(0.3)),
+        border: Border.all(color: color.withValues(alpha:0.3)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,

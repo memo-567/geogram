@@ -5,7 +5,6 @@
  * Email Thread Page - Displays email conversation
  */
 
-import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -399,7 +398,7 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
 
     final theme = Theme.of(context);
     final bubbleColor = isOwn
-        ? theme.colorScheme.primaryContainer.withOpacity(0.35)
+        ? theme.colorScheme.primaryContainer.withValues(alpha:0.35)
         : theme.colorScheme.surface;
 
     return Padding(
@@ -606,7 +605,7 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.grey.withOpacity(0.1),
+        color: Colors.grey.withValues(alpha:0.1),
         borderRadius: const BorderRadius.vertical(bottom: Radius.circular(4)),
       ),
       child: Column(
@@ -622,36 +621,23 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
   }
 
   Widget _buildImageAttachments(List<String> images) {
-    return FutureBuilder<String?>(
-      future: _emailService.getThreadFolderPath(_thread),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) return const SizedBox.shrink();
-        final threadPath = snapshot.data!;
-
-        // Build full paths for images
-        final imagePaths =
-            images.map((img) => p.join(threadPath, img)).toList();
-
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: imagePaths.asMap().entries.map((entry) {
-              final index = entry.key;
-              final path = entry.value;
-              return _buildImageThumbnail(path, imagePaths, index);
-            }).toList(),
-          ),
-        );
-      },
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: images.asMap().entries.map((entry) {
+          final index = entry.key;
+          final filename = entry.value;
+          return _buildImageThumbnail(filename, images, index);
+        }).toList(),
+      ),
     );
   }
 
   Widget _buildImageThumbnail(
-      String path, List<String> allImagePaths, int index) {
+      String filename, List<String> allImageFilenames, int index) {
     if (kIsWeb) {
-      // Web fallback
       return Container(
         width: 100,
         height: 100,
@@ -663,71 +649,98 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
       );
     }
 
-    return GestureDetector(
-      onTap: () {
-        // Open in PhotoViewerPage
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => PhotoViewerPage(
-              imagePaths: allImagePaths,
-              initialIndex: index,
+    return FutureBuilder<Uint8List?>(
+      future: _emailService.readAttachmentBytes(_thread, filename),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data == null) {
+          return Container(
+            width: 100,
+            height: 100,
+            decoration: BoxDecoration(
+              color: Colors.grey[200],
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: snapshot.connectionState == ConnectionState.waiting
+                ? const Center(
+                    child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  )
+                : const Icon(Icons.broken_image, color: Colors.grey),
+          );
+        }
+
+        return GestureDetector(
+          onTap: () => _openImageViewer(allImageFilenames, index),
+          child: Container(
+            width: 100,
+            height: 100,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.grey[300]!),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(7),
+              child: Image.memory(
+                snapshot.data!,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => Container(
+                  color: Colors.grey[200],
+                  child: const Icon(Icons.broken_image, color: Colors.grey),
+                ),
+              ),
             ),
           ),
         );
       },
-      child: Container(
-        width: 100,
-        height: 100,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.grey[300]!),
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(7),
-          child: Image.file(
-            File(path),
-            fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => Container(
-              color: Colors.grey[200],
-              child: const Icon(Icons.broken_image, color: Colors.grey),
-            ),
-          ),
+    );
+  }
+
+  Future<void> _openImageViewer(
+      List<String> imageFilenames, int initialIndex) async {
+    final paths = <String>[];
+    for (final filename in imageFilenames) {
+      final path =
+          await _emailService.exportAttachmentToTemp(_thread, filename);
+      if (path != null) paths.add(path);
+    }
+
+    if (paths.isEmpty || !mounted) return;
+
+    final adjustedIndex = initialIndex < paths.length ? initialIndex : 0;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PhotoViewerPage(
+          imagePaths: paths,
+          initialIndex: adjustedIndex,
         ),
       ),
     );
   }
 
   Widget _buildFileAttachments(List<String> files) {
-    return FutureBuilder<String?>(
-      future: _emailService.getThreadFolderPath(_thread),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) return const SizedBox.shrink();
-        final threadPath = snapshot.data!;
-
-        return Column(
-          children: files.map((file) {
-            final displayName = _getDisplayFileName(file);
-            final fullPath = p.join(threadPath, file);
-
-            return ListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.insert_drive_file, size: 20),
-              title: Text(
-                displayName,
-                style: const TextStyle(fontSize: 13),
-                overflow: TextOverflow.ellipsis,
-              ),
-              trailing: IconButton(
-                icon: const Icon(Icons.open_in_new, size: 20),
-                onPressed: () => _openFile(fullPath),
-                tooltip: 'Open',
-              ),
-            );
-          }).toList(),
+    return Column(
+      children: files.map((file) {
+        final displayName = _getDisplayFileName(file);
+        return ListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.insert_drive_file, size: 20),
+          title: Text(
+            displayName,
+            style: const TextStyle(fontSize: 13),
+            overflow: TextOverflow.ellipsis,
+          ),
+          trailing: IconButton(
+            icon: const Icon(Icons.open_in_new, size: 20),
+            onPressed: () => _openFile(file),
+            tooltip: 'Open',
+          ),
         );
-      },
+      }).toList(),
     );
   }
 
@@ -741,7 +754,7 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
     return hashedName;
   }
 
-  Future<void> _openFile(String path) async {
+  Future<void> _openFile(String filename) async {
     if (kIsWeb) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('File opening not supported on web')),
@@ -750,6 +763,17 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
     }
 
     try {
+      final path =
+          await _emailService.exportAttachmentToTemp(_thread, filename);
+      if (path == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('File not found')),
+          );
+        }
+        return;
+      }
+
       final uri = Uri.file(path);
       if (await canLaunchUrl(uri)) {
         await launchUrl(uri);
@@ -780,7 +804,7 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
+            color: Colors.black.withValues(alpha:0.04),
             blurRadius: 6,
             offset: const Offset(0, -2),
           ),

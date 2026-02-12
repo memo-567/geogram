@@ -10,6 +10,8 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'dart:typed_data';
 
 import '../models/email_account.dart';
 import '../models/email_message.dart';
@@ -203,6 +205,57 @@ class EmailService {
     final relativePath =
         thread.folderPath ?? EmailFormat.getThreadPath(thread);
     return _storage.getAbsolutePath(relativePath);
+  }
+
+  // ============ Attachment Operations ============
+
+  /// Whether the underlying storage is encrypted
+  bool get isEncryptedStorage => _storage.isEncrypted;
+
+  /// Write attachment bytes to a thread's folder via ProfileStorage.
+  Future<void> writeAttachment(
+      EmailThread thread, String filename, Uint8List bytes) async {
+    await initialize();
+    final relativePath =
+        thread.folderPath ?? EmailFormat.getThreadPath(thread);
+    await _storage.writeBytes('$relativePath/$filename', bytes);
+  }
+
+  /// Read attachment bytes from a thread's folder via ProfileStorage.
+  Future<Uint8List?> readAttachmentBytes(
+      EmailThread thread, String filename) async {
+    await initialize();
+    final relativePath =
+        thread.folderPath ?? EmailFormat.getThreadPath(thread);
+    return _storage.readBytes('$relativePath/$filename');
+  }
+
+  /// Export an attachment to a real file path for opening in external apps.
+  ///
+  /// For filesystem storage, returns the direct path (no copy needed).
+  /// For encrypted storage, extracts to a temp directory first.
+  Future<String?> exportAttachmentToTemp(
+      EmailThread thread, String filename) async {
+    await initialize();
+    final relativePath =
+        thread.folderPath ?? EmailFormat.getThreadPath(thread);
+    final fileRelPath = '$relativePath/$filename';
+
+    if (!_storage.isEncrypted) {
+      return _storage.getAbsolutePath(fileRelPath);
+    }
+
+    // Encrypted: extract to temp directory
+    final tempDir = Directory.systemTemp.path;
+    final tempPath = '$tempDir/geogram_email_temp/$filename';
+    await Directory('$tempDir/geogram_email_temp').create(recursive: true);
+    try {
+      await _storage.copyToExternal(fileRelPath, tempPath);
+      return tempPath;
+    } catch (e) {
+      LogService().log('Error exporting attachment to temp: $e');
+      return null;
+    }
   }
 
   /// Load a thread from disk

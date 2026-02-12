@@ -6,6 +6,7 @@
  */
 
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -552,8 +553,14 @@ class _EmailComposePageState extends State<EmailComposePage> {
 
   @override
   Widget build(BuildContext context) {
-    return WillPopScope(
-      onWillPop: _onWillPop,
+    return PopScope(
+      canPop: !_isDirty,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (!didPop) {
+          final shouldPop = await _onWillPop();
+          if (shouldPop && mounted) Navigator.pop(context);
+        }
+      },
       child: Scaffold(
         appBar: AppBar(
           leading: IconButton(
@@ -777,9 +784,9 @@ class _EmailComposePageState extends State<EmailComposePage> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.12),
+          color: color.withValues(alpha:0.12),
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: color.withOpacity(0.4)),
+          border: Border.all(color: color.withValues(alpha:0.4)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -1336,9 +1343,6 @@ class _EmailComposePageState extends State<EmailComposePage> {
   Future<Map<String, String>?> _copyAttachmentsToThread(EmailThread thread) async {
     if (_attachments.isEmpty || kIsWeb) return null;
 
-    final threadPath = await _emailService.getThreadFolderPath(thread);
-    if (threadPath == null) return null;
-
     final metadata = <String, String>{};
     final attachmentNames = <String>[];
 
@@ -1348,9 +1352,9 @@ class _EmailComposePageState extends State<EmailComposePage> {
         final bytes = await sourceFile.readAsBytes();
         final hashedName = _generateAttachmentFilename(attachment.name, bytes);
 
-        // Copy file to thread folder
-        final destPath = p.join(threadPath, hashedName);
-        await File(destPath).writeAsBytes(bytes);
+        // Write attachment via ProfileStorage (works for both filesystem and encrypted)
+        await _emailService.writeAttachment(
+            thread, hashedName, Uint8List.fromList(bytes));
 
         attachmentNames.add(hashedName);
       } catch (e) {

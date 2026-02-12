@@ -7276,6 +7276,10 @@ Future<Uint8List?> getAttachmentBytes(String channelFolder, String filename) asy
 **Files using this pattern:**
 - `lib/pages/chat_browser_page.dart` - `_resolveAttachedFilePath()` for chat images
 - `lib/services/chat_service.dart` - `getAttachmentBytes()` for reading via ProfileStorage
+- `lib/pages/email_thread_page.dart` - `_buildImageThumbnail()` uses `Image.memory()` from `readAttachmentBytes()`
+- `lib/pages/email_thread_page.dart` - `_openFile()` / `_openImageViewer()` use `exportAttachmentToTemp()`
+- `lib/pages/email_compose_page.dart` - `_copyAttachmentsToThread()` uses `writeAttachment()`
+- `lib/services/email_service.dart` - `writeAttachment()`, `readAttachmentBytes()`, `exportAttachmentToTemp()`
 
 ### Supported Services
 
@@ -7284,6 +7288,7 @@ The following services support ProfileStorage:
 - ChatService
 - ContactService
 - BlogService
+- EmailService
 - EventService
 - GroupsService
 - ForumService
