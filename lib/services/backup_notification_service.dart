@@ -30,7 +30,7 @@ class BackupNotificationService {
   /// Initialize notification handling for backup events
   Future<void> initialize({bool skipPermissionRequest = false}) async {
     if (_initialized) return;
-    if (!_isMobilePlatform()) {
+    if (!_isSupportedPlatform()) {
       _initialized = true;
       LogService().log('BackupNotificationService: Skipping init on non-mobile platform');
       return;
@@ -46,8 +46,19 @@ class BackupNotificationService {
     }
   }
 
-  bool _isMobilePlatform() {
-    return defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS;
+  bool _isSupportedPlatform() {
+    if (kIsWeb) return false;
+    return defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS ||
+        defaultTargetPlatform == TargetPlatform.linux ||
+        defaultTargetPlatform == TargetPlatform.windows ||
+        defaultTargetPlatform == TargetPlatform.macOS;
+  }
+
+  bool _isDesktopPlatform() {
+    return defaultTargetPlatform == TargetPlatform.linux ||
+        defaultTargetPlatform == TargetPlatform.windows ||
+        defaultTargetPlatform == TargetPlatform.macOS;
   }
 
   Future<void> _initializeNotifications({bool skipPermissionRequest = false}) async {
@@ -57,7 +68,14 @@ class BackupNotificationService {
       requestBadgePermission: !skipPermissionRequest,
       requestSoundPermission: !skipPermissionRequest,
     );
-    final initSettings = InitializationSettings(android: androidSettings, iOS: iosSettings);
+    const linuxSettings = LinuxInitializationSettings(
+      defaultActionName: 'Open Geogram',
+    );
+    final initSettings = InitializationSettings(
+      android: androidSettings,
+      iOS: iosSettings,
+      linux: linuxSettings,
+    );
 
     await _notificationsPlugin.initialize(initSettings);
 
@@ -74,6 +92,11 @@ class BackupNotificationService {
           ?.requestNotificationsPermission();
       _permissionRequested = true;
     }
+
+    // Desktop platforms don't require explicit permission
+    if (_isDesktopPlatform()) {
+      _permissionRequested = true;
+    }
   }
 
   void _subscribeToEvents() {
@@ -83,7 +106,7 @@ class BackupNotificationService {
   }
 
   Future<void> _handleEvent(BackupEvent event) async {
-    if (!_initialized || !_isMobilePlatform()) return;
+    if (!_initialized || !_isSupportedPlatform()) return;
 
     final settings = NotificationService().getSettings();
     if (!settings.enableNotifications || !settings.notifySystemAlerts) {
@@ -187,7 +210,14 @@ class BackupNotificationService {
       presentBadge: true,
       presentSound: true,
     );
-    const details = NotificationDetails(android: androidDetails, iOS: iosDetails);
+    const linuxDetails = LinuxNotificationDetails(
+      urgency: LinuxNotificationUrgency.normal,
+    );
+    const details = NotificationDetails(
+      android: androidDetails,
+      iOS: iosDetails,
+      linux: linuxDetails,
+    );
 
     await _notificationsPlugin.show(
       DateTime.now().millisecondsSinceEpoch ~/ 1000,

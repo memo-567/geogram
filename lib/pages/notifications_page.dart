@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import '../models/notification_settings.dart';
 import '../services/notification_service.dart';
 import '../services/log_service.dart';
@@ -253,6 +254,46 @@ class _NotificationsPageState extends State<NotificationsPage> {
             },
           ),
 
+          // Desktop-only: Minimize to Tray
+          if (_isDesktopPlatform()) ...[
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Divider(),
+            ),
+
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.desktop_windows,
+                    size: 20,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Desktop',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                  ),
+                ],
+              ),
+            ),
+
+            _buildNotificationTile(
+              context: context,
+              icon: Icons.minimize,
+              title: 'Minimize to Tray',
+              subtitle: 'Hide to system tray when closing or minimizing the window',
+              value: _settings!.minimizeToTray,
+              enabled: _settings!.enableNotifications,
+              onChanged: (value) {
+                _updateSettings(_settings!.copyWith(minimizeToTray: value));
+              },
+            ),
+          ],
+
           const SizedBox(height: 16),
 
           // Info Card
@@ -300,6 +341,13 @@ class _NotificationsPageState extends State<NotificationsPage> {
         ],
       ),
     );
+  }
+
+  bool _isDesktopPlatform() {
+    if (kIsWeb) return false;
+    return defaultTargetPlatform == TargetPlatform.linux ||
+        defaultTargetPlatform == TargetPlatform.windows ||
+        defaultTargetPlatform == TargetPlatform.macOS;
   }
 
   Widget _buildNotificationTile({

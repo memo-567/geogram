@@ -73,6 +73,10 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [FileBrowserCacheService](#filebrowsercacheservice) - Persistent cache for file browser operations
 - [SQLiteLoader](#sqliteloader) - Platform-aware SQLite database loading
 - [ProfileStorage](#profilestorage) - Abstraction layer for encrypted/filesystem storage
+- [TrayService](#trayservice) - System tray icon with minimize-to-tray and restore
+
+### Desktop Patterns
+- [Desktop Platform Guard](#desktop-platform-guard) - Reusable check for Linux/Windows/macOS
 
 ### USB/Transport Services
 - [UsbAoaService](#usbaoapservice) - Cross-platform USB AOA service layer
@@ -7998,3 +8002,56 @@ bool isReservedName(String name) {
 ```
 
 **See**: [docs/apps/manifest-schema.md](apps/manifest-schema.md#reserved-folder-names)
+
+---
+
+### TrayService
+
+**File**: `lib/services/tray_service.dart`
+
+**Pattern**: Singleton desktop service that manages the system tray icon, context menu, and window hide/restore.
+
+**Usage**:
+```dart
+// Initialize (call once during startup, after window_manager)
+await TrayService().initialize();
+
+// Hide window to tray
+await TrayService().hideToTray();
+
+// Restore from tray
+await TrayService().restoreFromTray();
+
+// Check if hidden
+if (TrayService().isWindowHidden) { ... }
+
+// Check platform support
+if (TrayService().isSupported) { ... }
+```
+
+**Reuse potential**: Any feature that needs to check window visibility or restore the window (e.g., notification tap handlers) should use `TrayService().restoreFromTray()`.
+
+---
+
+### Desktop Platform Guard
+
+**Pattern**: Reusable platform check for desktop (Linux/Windows/macOS). Used in `DMNotificationService`, `BackupNotificationService`, `NotificationsPage`, and `TrayService`.
+
+```dart
+bool _isDesktopPlatform() {
+  return defaultTargetPlatform == TargetPlatform.linux ||
+      defaultTargetPlatform == TargetPlatform.windows ||
+      defaultTargetPlatform == TargetPlatform.macOS;
+}
+
+bool _isSupportedPlatform() {
+  if (kIsWeb) return false;
+  return defaultTargetPlatform == TargetPlatform.android ||
+      defaultTargetPlatform == TargetPlatform.iOS ||
+      defaultTargetPlatform == TargetPlatform.linux ||
+      defaultTargetPlatform == TargetPlatform.windows ||
+      defaultTargetPlatform == TargetPlatform.macOS;
+}
+```
+
+**Reuse potential**: Any service that should run on all native platforms (not just mobile) should use `_isSupportedPlatform()`. For desktop-only features, use `_isDesktopPlatform()`.

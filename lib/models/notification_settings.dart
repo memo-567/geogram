@@ -8,6 +8,7 @@ class NotificationSettings {
   bool notifySystemAlerts;
   bool soundEnabled;
   bool vibrationEnabled;
+  bool minimizeToTray;
 
   NotificationSettings({
     this.enableNotifications = true,
@@ -18,6 +19,7 @@ class NotificationSettings {
     this.notifySystemAlerts = true,
     this.soundEnabled = true,
     this.vibrationEnabled = true,
+    this.minimizeToTray = true,
   });
 
   /// Create from JSON
@@ -31,6 +33,7 @@ class NotificationSettings {
       notifySystemAlerts: json['notifySystemAlerts'] as bool? ?? true,
       soundEnabled: json['soundEnabled'] as bool? ?? true,
       vibrationEnabled: json['vibrationEnabled'] as bool? ?? true,
+      minimizeToTray: json['minimizeToTray'] as bool? ?? true,
     );
   }
 
@@ -45,6 +48,7 @@ class NotificationSettings {
       'notifySystemAlerts': notifySystemAlerts,
       'soundEnabled': soundEnabled,
       'vibrationEnabled': vibrationEnabled,
+      'minimizeToTray': minimizeToTray,
     };
   }
 
@@ -58,6 +62,7 @@ class NotificationSettings {
     bool? notifySystemAlerts,
     bool? soundEnabled,
     bool? vibrationEnabled,
+    bool? minimizeToTray,
   }) {
     return NotificationSettings(
       enableNotifications: enableNotifications ?? this.enableNotifications,
@@ -68,6 +73,7 @@ class NotificationSettings {
       notifySystemAlerts: notifySystemAlerts ?? this.notifySystemAlerts,
       soundEnabled: soundEnabled ?? this.soundEnabled,
       vibrationEnabled: vibrationEnabled ?? this.vibrationEnabled,
+      minimizeToTray: minimizeToTray ?? this.minimizeToTray,
     );
   }
 }

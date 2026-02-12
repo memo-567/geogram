@@ -48,6 +48,7 @@ import 'services/dm_queue_service.dart';
 import 'services/websocket_service.dart';
 import 'services/backup_service.dart';
 import 'services/window_state_service.dart';
+import 'services/tray_service.dart';
 import 'services/group_sync_service.dart';
 import 'services/map_tile_service.dart';
 import 'cli/pure_storage_config.dart';
@@ -381,6 +382,9 @@ void main() async {
 
     await MessageAttentionService().initialize();
     LogService().log('MessageAttentionService initialized');
+
+    await TrayService().initialize();
+    LogService().log('TrayService initialized');
   } catch (e, stackTrace) {
     LogService().log('ERROR during critical initialization: $e');
     LogService().log('Stack trace: $stackTrace');

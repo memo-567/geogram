@@ -9,6 +9,7 @@ import '../platform/title_manager.dart';
 import '../services/log_service.dart';
 import '../services/notification_service.dart';
 import '../services/profile_service.dart';
+import '../services/tray_service.dart';
 import '../util/event_bus.dart';
 
 /// Provides lightweight attention on desktop/web for new messages.
@@ -78,6 +79,9 @@ class MessageAttentionService {
   }
 
   Future<void> _signalAttention(String label) async {
+    // Skip title change when window is hidden to tray (title not visible)
+    if (TrayService().isWindowHidden) return;
+
     final focused = await _titleManager.isFocused();
     if (focused) return;
 

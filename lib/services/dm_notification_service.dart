@@ -11,6 +11,7 @@ import '../util/event_bus.dart';
 import '../services/notification_service.dart';
 import '../services/profile_service.dart';
 import '../services/log_service.dart';
+import '../services/tray_service.dart';
 
 /// Key for storing pending notification action in SharedPreferences
 const String _pendingActionKey = 'pending_notification_action';
@@ -67,9 +68,9 @@ class DMNotificationService {
   Future<void> initialize({bool skipPermissionRequest = false}) async {
     if (_initialized) return;
 
-    // Only initialize on mobile platforms (Android/iOS)
-    if (!_isMobilePlatform()) {
-      LogService().log('DMNotificationService: Skipping initialization on non-mobile platform');
+    // Only initialize on supported platforms (Android/iOS/Linux/Windows/macOS)
+    if (!_isSupportedPlatform()) {
+      LogService().log('DMNotificationService: Skipping initialization on unsupported platform');
       _initialized = true;
       return;
     }
@@ -84,10 +85,21 @@ class DMNotificationService {
     }
   }
 
-  /// Check if running on mobile platform (Android or iOS)
-  bool _isMobilePlatform() {
+  /// Check if running on a supported platform (mobile + desktop)
+  bool _isSupportedPlatform() {
+    if (kIsWeb) return false;
     return defaultTargetPlatform == TargetPlatform.android ||
-           defaultTargetPlatform == TargetPlatform.iOS;
+        defaultTargetPlatform == TargetPlatform.iOS ||
+        defaultTargetPlatform == TargetPlatform.linux ||
+        defaultTargetPlatform == TargetPlatform.windows ||
+        defaultTargetPlatform == TargetPlatform.macOS;
+  }
+
+  /// Check if running on a desktop platform
+  bool _isDesktopPlatform() {
+    return defaultTargetPlatform == TargetPlatform.linux ||
+        defaultTargetPlatform == TargetPlatform.windows ||
+        defaultTargetPlatform == TargetPlatform.macOS;
   }
 
   /// Initialize flutter_local_notifications
@@ -102,9 +114,15 @@ class DMNotificationService {
       requestSoundPermission: !skipPermissionRequest,
     );
 
+    // Linux initialization settings (D-Bus notifications)
+    const linuxSettings = LinuxInitializationSettings(
+      defaultActionName: 'Open Geogram',
+    );
+
     final initSettings = InitializationSettings(
       android: androidSettings,
       iOS: iosSettings,
+      linux: linuxSettings,
     );
 
     // Initialize plugin
@@ -131,6 +149,11 @@ class DMNotificationService {
       await _notificationsPlugin
           .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
           ?.requestNotificationsPermission();
+      _permissionRequested = true;
+    }
+
+    // Desktop platforms (Linux/Windows/macOS) don't require explicit permission
+    if (_isDesktopPlatform()) {
       _permissionRequested = true;
     }
 
@@ -254,7 +277,7 @@ class DMNotificationService {
     String? fileName,
     String? imagePath,
   }) async {
-    if (!_initialized || !_isMobilePlatform()) return;
+    if (!_initialized || !_isSupportedPlatform()) return;
 
     final settings = NotificationService().getSettings();
     if (!settings.enableNotifications || !settings.notifyNewMessages) {
@@ -314,9 +337,15 @@ class DMNotificationService {
       presentSound: settings.soundEnabled,
     );
 
+    // Linux notification details
+    const linuxDetails = LinuxNotificationDetails(
+      urgency: LinuxNotificationUrgency.normal,
+    );
+
     final notificationDetails = NotificationDetails(
       android: androidDetails,
       iOS: iosDetails,
+      linux: linuxDetails,
     );
 
     // Use fromCallsign hash as notification ID to allow multiple notifications
@@ -403,9 +432,14 @@ class DMNotificationService {
       presentSound: settings.soundEnabled,
     );
 
+    const linuxDetails = LinuxNotificationDetails(
+      urgency: LinuxNotificationUrgency.normal,
+    );
+
     final notificationDetails = NotificationDetails(
       android: androidDetails,
       iOS: iosDetails,
+      linux: linuxDetails,
     );
 
     final notificationId = '$roomId:$fromCallsign'.hashCode.abs();
@@ -463,6 +497,11 @@ class DMNotificationService {
       final type = payload.substring(0, colonIndex);
       final data = payload.substring(colonIndex + 1);
       print('NOTIFICATION_DEBUG: parsed type=$type, data=$data');
+
+      // Restore window from tray if hidden (desktop)
+      if (_isDesktopPlatform() && TrayService().isWindowHidden) {
+        TrayService().restoreFromTray();
+      }
 
       // Fire event for immediate navigation (foreground + background resume)
       if (type == 'dm') {
