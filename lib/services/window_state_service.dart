@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 import 'config_service.dart';
 import 'log_service.dart';
+import 'tray_service.dart';
 
 /// Service to persist and restore window position/size on desktop platforms
 class WindowStateService with WindowListener {
@@ -128,6 +129,11 @@ class WindowStateService with WindowListener {
     _isMaximized = await windowManager.isMaximized();
     // Initialize last known size for resize validation
     _lastKnownSize = await windowManager.getSize();
+    // Intercept the close button so we can minimize to tray instead
+    if (TrayService().isSupported) {
+      await windowManager.setPreventClose(true);
+      await windowManager.setMinimizable(false);
+    }
     LogService().log('WindowStateService: Started listening for window changes');
   }
 
@@ -235,12 +241,21 @@ class WindowStateService with WindowListener {
   }
 
   @override
-  void onWindowClose() {
+  void onWindowClose() async {
     // Save state immediately before closing
     _saveDebounceTimer?.cancel();
     // Only save size/position if not maximized (we want to preserve the unmaximized dimensions)
     if (!_isMaximized) {
-      _saveCurrentState();
+      await _saveCurrentState();
+    }
+    // Try to minimize to tray instead of closing
+    final tray = TrayService();
+    if (tray.isSupported) {
+      await tray.hideToTray();
+      // If hideToTray didn't actually hide (setting is off), destroy the window
+      if (!tray.isWindowHidden) {
+        await windowManager.destroy();
+      }
     }
   }
 
