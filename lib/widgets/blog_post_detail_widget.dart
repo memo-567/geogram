@@ -346,8 +346,6 @@ class BlogPostDetailWidget extends StatelessWidget {
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.primary,
                           fontFamily: 'monospace',
-                          decoration: TextDecoration.underline,
-                          decorationColor: theme.colorScheme.primary,
                         ),
                         overflow: TextOverflow.ellipsis,
                       ),
