@@ -870,14 +870,13 @@ class WebSocketService {
         final appsDir = appService.appsDirectory;
         final chatPath = '${appsDir.path}/chat';
         await appService.generateChatIndex(chatPath);
-        // Update storagePath to point to chat collection
-        final chatDir = Directory(chatPath);
-        if (await chatDir.exists()) {
-          final fullChatPath = '$chatPath$filePath';
-          final chatFile = File(fullChatPath);
-          if (await chatFile.exists()) {
-            final fileBytes = await chatFile.readAsBytes();
-            final fileContent = base64Encode(fileBytes);
+        // Read the generated file via ProfileStorage
+        final chatProfileStorage = AppService().profileStorage;
+        if (chatProfileStorage != null) {
+          final chatAppStorage = ScopedProfileStorage.fromAbsolutePath(chatProfileStorage, chatPath);
+          final chatFileBytes = await chatAppStorage.readBytes('index.html');
+          if (chatFileBytes != null) {
+            final fileContent = base64Encode(chatFileBytes);
             _sendHttpResponse(
               requestId,
               200,
@@ -885,24 +884,29 @@ class WebSocketService {
               fileContent,
               isBase64: true,
             );
-            LogService().log('Sent chat HTTP response: 200 OK (${fileBytes.length} bytes)');
+            LogService().log('Sent chat HTTP response: 200 OK (${chatFileBytes.length} bytes)');
             return;
           }
         }
       }
 
-      // Construct file path
-      final fullPath = '$storagePath$filePath';
-      final file = File(fullPath);
+      // Read file via ProfileStorage
+      final profileStorage = AppService().profileStorage;
+      if (profileStorage == null) {
+        _sendHttpResponse(requestId, 500, {'Content-Type': 'text/plain'}, 'Storage not available');
+        return;
+      }
 
-      if (!await file.exists()) {
-        LogService().log('File not found: $fullPath');
+      final appStorage = ScopedProfileStorage.fromAbsolutePath(profileStorage, storagePath);
+      final relativePath = filePath.startsWith('/') ? filePath.substring(1) : filePath;
+      final fileBytes = await appStorage.readBytes(relativePath);
+
+      if (fileBytes == null) {
+        LogService().log('File not found: $storagePath$filePath');
         _sendHttpResponse(requestId, 404, {'Content-Type': 'text/plain'}, 'Not Found');
         return;
       }
 
-      // Read file content
-      final fileBytes = await file.readAsBytes();
       final fileContent = base64Encode(fileBytes);
 
       // Determine content type

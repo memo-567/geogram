@@ -341,10 +341,16 @@ class AppService {
         'GENERATED_DATE': DateTime.now().toIso8601String(),
       });
 
-      // Write index.html to the app folder
-      final indexFile = File('${app.storagePath}/index.html');
-      await indexFile.writeAsString(html);
-      stderr.writeln('Generated default www index.html: ${indexFile.path}');
+      // Write index.html to the app folder via ProfileStorage
+      if (_profileStorage != null && app.storagePath != null) {
+        final appStorage = ScopedProfileStorage.fromAbsolutePath(_profileStorage!, app.storagePath!);
+        await appStorage.writeString('index.html', html);
+        stderr.writeln('Generated default www index.html: ${app.storagePath}/index.html');
+      } else {
+        final indexFile = File('${app.storagePath}/index.html');
+        await indexFile.writeAsString(html);
+        stderr.writeln('Generated default www index.html: ${indexFile.path}');
+      }
     } catch (e) {
       stderr.writeln('Error generating default www index.html: $e');
     }
@@ -376,27 +382,56 @@ class AppService {
   /// Returns the cache data and writes it to {blogAppPath}/cache.json
   Future<Map<String, dynamic>> generateBlogCache(String blogAppPath) async {
     final posts = <Map<String, dynamic>>[];
-    final blogDir = Directory(blogAppPath);
 
-    if (!await blogDir.exists()) {
-      return _writeBlogCache(blogAppPath, posts);
-    }
+    // Use ProfileStorage if available
+    if (_profileStorage != null) {
+      final appStorage = ScopedProfileStorage.fromAbsolutePath(_profileStorage!, blogAppPath);
+      if (!await appStorage.directoryExists('')) {
+        return _writeBlogCache(blogAppPath, posts);
+      }
 
-    // Scan year directories (2024, 2025, etc.)
-    await for (final yearEntity in blogDir.list()) {
-      if (yearEntity is Directory) {
-        final yearName = yearEntity.path.split('/').last;
-        // Skip non-year directories
-        if (!RegExp(r'^\d{4}$').hasMatch(yearName)) continue;
+      // Scan year directories (2024, 2025, etc.)
+      final entries = await appStorage.listDirectory('');
+      for (final entry in entries) {
+        if (entry.isDirectory && RegExp(r'^\d{4}$').hasMatch(entry.name)) {
+          final yearName = entry.name;
+          // Scan post folders inside year directory
+          final postEntries = await appStorage.listDirectory(yearName);
+          for (final postEntry in postEntries) {
+            if (postEntry.isDirectory) {
+              final postContent = await appStorage.readString('$yearName/${postEntry.name}/post.md');
+              if (postContent != null) {
+                final postData = _parsePostContent(postContent, postEntry.name, yearName);
+                if (postData != null) {
+                  posts.add(postData);
+                }
+              }
+            }
+          }
+        }
+      }
+    } else {
+      final blogDir = Directory(blogAppPath);
+      if (!await blogDir.exists()) {
+        return _writeBlogCache(blogAppPath, posts);
+      }
 
-        // Scan post folders inside year directory
-        await for (final postEntity in yearEntity.list()) {
-          if (postEntity is Directory) {
-            final postFile = File('${postEntity.path}/post.md');
-            if (await postFile.exists()) {
-              final postData = await _parsePostMetadata(postFile, yearName);
-              if (postData != null) {
-                posts.add(postData);
+      // Scan year directories (2024, 2025, etc.)
+      await for (final yearEntity in blogDir.list()) {
+        if (yearEntity is Directory) {
+          final yearName = yearEntity.path.split('/').last;
+          if (!RegExp(r'^\d{4}$').hasMatch(yearName)) continue;
+
+          await for (final postEntity in yearEntity.list()) {
+            if (postEntity is Directory) {
+              final postFile = File('${postEntity.path}/post.md');
+              if (await postFile.exists()) {
+                final content = await postFile.readAsString();
+                final postFolder = postEntity.path.split('/').last;
+                final postData = _parsePostContent(content, postFolder, yearName);
+                if (postData != null) {
+                  posts.add(postData);
+                }
               }
             }
           }
@@ -410,17 +445,15 @@ class AppService {
     return _writeBlogCache(blogAppPath, posts);
   }
 
-  /// Parse post.md file and extract metadata
-  Future<Map<String, dynamic>?> _parsePostMetadata(File postFile, String year) async {
+  /// Parse post.md content string and extract metadata
+  Map<String, dynamic>? _parsePostContent(String content, String postFolder, String year) {
     try {
-      final content = await postFile.readAsString();
       final lines = content.split('\n');
 
       if (lines.isEmpty || !lines[0].startsWith('# BLOG: ')) {
         return null;
       }
 
-      final postFolder = postFile.parent.path.split('/').last;
       String? title = lines[0].substring(8).trim();
       String? author;
       String? created;
@@ -494,9 +527,14 @@ class AppService {
       'posts': posts,
     };
 
-    // Write cache.json
-    final cacheFile = File('$blogPath/cache.json');
-    await cacheFile.writeAsString(jsonEncode(cache));
+    // Write cache.json via ProfileStorage
+    if (_profileStorage != null) {
+      final appStorage = ScopedProfileStorage.fromAbsolutePath(_profileStorage!, blogPath);
+      await appStorage.writeString('cache.json', jsonEncode(cache));
+    } else {
+      final cacheFile = File('$blogPath/cache.json');
+      await cacheFile.writeAsString(jsonEncode(cache));
+    }
 
     return cache;
   }
@@ -559,9 +597,14 @@ class AppService {
         'DATA_JSON': jsonEncode({'posts': publishedPosts}),
       });
 
-      // Write index.html
-      final indexFile = File('$blogAppPath/index.html');
-      await indexFile.writeAsString(html);
+      // Write index.html via ProfileStorage
+      if (_profileStorage != null) {
+        final appStorage = ScopedProfileStorage.fromAbsolutePath(_profileStorage!, blogAppPath);
+        await appStorage.writeString('index.html', html);
+      } else {
+        final indexFile = File('$blogAppPath/index.html');
+        await indexFile.writeAsString(html);
+      }
     } catch (e) {
       stderr.writeln('Error generating blog index: $e');
     }
@@ -573,40 +616,76 @@ class AppService {
     final dirPath = appsPath ?? _appsDir?.path;
     if (dirPath == null) return null;
 
-    final appsDir = Directory(dirPath);
-    if (!await appsDir.exists()) return null;
-
     try {
-      // Look for blog apps
-      await for (final entity in appsDir.list()) {
-        if (entity is Directory) {
-          final folderName = entity.path.split('/').last;
-          final appJs = File('${entity.path}/app.js');
+      if (_profileStorage != null) {
+        final appsStorage = ScopedProfileStorage.fromAbsolutePath(_profileStorage!, dirPath);
+        if (!await appsStorage.directoryExists('')) return null;
 
-          if (await appJs.exists()) {
-            final content = await appJs.readAsString();
+        final entries = await appsStorage.listDirectory('');
+        for (final entry in entries) {
+          if (!entry.isDirectory) continue;
+          final folderName = entry.name;
 
-            // Check if this is a blog app
-            final isBlog = content.contains('"type": "blog"') ||
-                          content.contains('"type":"blog"') ||
-                          folderName == 'blog';
+          final appJsContent = await appsStorage.readString('$folderName/app.js');
+          if (appJsContent == null) continue;
 
-            if (isBlog) {
-              // Check app visibility
-              try {
-                final appData = jsonDecode(content) as Map<String, dynamic>;
-                if (appData['visibility'] == 'private') continue;
-              } catch (_) {}
+          // Check if this is a blog app
+          final isBlog = appJsContent.contains('"type": "blog"') ||
+                        appJsContent.contains('"type":"blog"') ||
+                        folderName == 'blog';
 
-              // Read cache if recent, otherwise regenerate
-              final cache = await getBlogCacheOrRegenerate(entity.path);
-              final publishedCount = cache['publishedCount'] as int? ?? 0;
+          if (isBlog) {
+            // Check app visibility
+            try {
+              final appData = jsonDecode(appJsContent) as Map<String, dynamic>;
+              if (appData['visibility'] == 'private') continue;
+            } catch (_) {}
 
-              if (publishedCount > 0) {
-                return {
-                  'postCount': publishedCount,
-                  'appPath': entity.path,
-                };
+            // Read cache if recent, otherwise regenerate
+            final appAbsPath = appsStorage.getAbsolutePath(folderName);
+            final cache = await getBlogCacheOrRegenerate(appAbsPath);
+            final publishedCount = cache['publishedCount'] as int? ?? 0;
+
+            if (publishedCount > 0) {
+              return {
+                'postCount': publishedCount,
+                'appPath': appAbsPath,
+              };
+            }
+          }
+        }
+      } else {
+        final appsDir = Directory(dirPath);
+        if (!await appsDir.exists()) return null;
+
+        // Look for blog apps
+        await for (final entity in appsDir.list()) {
+          if (entity is Directory) {
+            final folderName = entity.path.split('/').last;
+            final appJs = File('${entity.path}/app.js');
+
+            if (await appJs.exists()) {
+              final content = await appJs.readAsString();
+
+              final isBlog = content.contains('"type": "blog"') ||
+                            content.contains('"type":"blog"') ||
+                            folderName == 'blog';
+
+              if (isBlog) {
+                try {
+                  final appData = jsonDecode(content) as Map<String, dynamic>;
+                  if (appData['visibility'] == 'private') continue;
+                } catch (_) {}
+
+                final cache = await getBlogCacheOrRegenerate(entity.path);
+                final publishedCount = cache['publishedCount'] as int? ?? 0;
+
+                if (publishedCount > 0) {
+                  return {
+                    'postCount': publishedCount,
+                    'appPath': entity.path,
+                  };
+                }
               }
             }
           }
@@ -713,11 +792,21 @@ class AppService {
       });
 
       // Determine which apps are available for this app
-      // chatAppPath is like /path/to/app/chat, so parent is the app
-      final appDir = Directory(chatAppPath).parent;
-      final hasBlog = await Directory('${appDir.path}/blog').exists();
-      final hasEvents = await Directory('${appDir.path}/events').exists();
-      final hasPlaces = await Directory('${appDir.path}/places').exists();
+      // chatAppPath is like /path/to/app/chat, so parent is the apps dir
+      final parentPath = p.dirname(chatAppPath);
+      bool hasBlog;
+      bool hasEvents;
+      bool hasPlaces;
+      if (_profileStorage != null) {
+        final parentStorage = ScopedProfileStorage.fromAbsolutePath(_profileStorage!, parentPath);
+        hasBlog = await parentStorage.directoryExists('blog');
+        hasEvents = await parentStorage.directoryExists('events');
+        hasPlaces = await parentStorage.directoryExists('places');
+      } else {
+        hasBlog = await Directory('$parentPath/blog').exists();
+        hasEvents = await Directory('$parentPath/events').exists();
+        hasPlaces = await Directory('$parentPath/places').exists();
+      }
 
       // Generate menu items for device pages
       final menuItems = WebNavigation.generateDeviceMenuItems(
@@ -743,9 +832,14 @@ class AppService {
         'GENERATED_DATE': DateTime.now().toIso8601String().split('T').first,
       });
 
-      // Write index.html
-      final indexFile = File('$chatAppPath/index.html');
-      await indexFile.writeAsString(html);
+      // Write index.html via ProfileStorage
+      if (_profileStorage != null) {
+        final appStorage = ScopedProfileStorage.fromAbsolutePath(_profileStorage!, chatAppPath);
+        await appStorage.writeString('index.html', html);
+      } else {
+        final indexFile = File('$chatAppPath/index.html');
+        await indexFile.writeAsString(html);
+      }
     } catch (e) {
       stderr.writeln('Error generating chat index: $e');
     }
@@ -753,19 +847,41 @@ class AppService {
 
   /// Get blog cache - reads existing if less than a day old, otherwise regenerates
   Future<Map<String, dynamic>> getBlogCacheOrRegenerate(String blogPath) async {
-    final cacheFile = File('$blogPath/cache.json');
-
-    if (await cacheFile.exists()) {
-      final stat = await cacheFile.stat();
-      final age = DateTime.now().difference(stat.modified);
-
-      // If cache is less than a day old, use it
-      if (age.inHours < 24) {
+    // Use ProfileStorage if available
+    if (_profileStorage != null) {
+      final appStorage = ScopedProfileStorage.fromAbsolutePath(_profileStorage!, blogPath);
+      final content = await appStorage.readString('cache.json');
+      if (content != null) {
         try {
-          final content = await cacheFile.readAsString();
-          return jsonDecode(content) as Map<String, dynamic>;
+          final cache = jsonDecode(content) as Map<String, dynamic>;
+          // Check if cache is less than a day old
+          final generated = cache['generated'] as String?;
+          if (generated != null) {
+            final generatedDate = DateTime.tryParse(generated);
+            if (generatedDate != null) {
+              final age = DateTime.now().difference(generatedDate);
+              if (age.inHours < 24) {
+                return cache;
+              }
+            }
+          }
         } catch (_) {
           // Cache corrupted, regenerate
+        }
+      }
+    } else {
+      final cacheFile = File('$blogPath/cache.json');
+      if (await cacheFile.exists()) {
+        final stat = await cacheFile.stat();
+        final age = DateTime.now().difference(stat.modified);
+
+        if (age.inHours < 24) {
+          try {
+            final content = await cacheFile.readAsString();
+            return jsonDecode(content) as Map<String, dynamic>;
+          } catch (_) {
+            // Cache corrupted, regenerate
+          }
         }
       }
     }
