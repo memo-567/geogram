@@ -1813,19 +1813,6 @@ class _HomePageState extends State<HomePage> {
                     );
                   },
                 ),
-                ListTile(
-                  leading: const Icon(Icons.sync_alt),
-                  title: Text(_i18n.tOrDefault('mirror', 'Mirror')),
-                  onTap: () {
-                    Navigator.pop(context);
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const MirrorSettingsPage(),
-                      ),
-                    );
-                  },
-                ),
                 if (_profileService.getProfile().isRelay)
                   ListTile(
                     leading: const Icon(Icons.cell_tower, color: Colors.orange),

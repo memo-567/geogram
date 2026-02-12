@@ -443,15 +443,6 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
       floatingActionButton: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (!kIsWeb)
-            FloatingActionButton.extended(
-              heroTag: 'setup_mirror',
-              onPressed: _setupMirror,
-              icon: const Icon(Icons.sync_alt),
-              label: const Text('Mirror'),
-            ),
-          if (!kIsWeb)
-            const SizedBox(width: 12),
           FloatingActionButton.extended(
             heroTag: 'new_profile',
             onPressed: _createNewProfile,
