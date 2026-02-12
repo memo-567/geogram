@@ -104,6 +104,14 @@ class FileFolderPicker extends StatefulWidget {
   /// via ProfileStorage instead of raw filesystem access.
   final ProfileStorage? profileStorage;
 
+  /// Whether to show the storage location bar (Home, Downloads, etc.).
+  /// Defaults to true.
+  final bool showStorageBar;
+
+  /// When set, breadcrumbs only show segments at or below this path,
+  /// and upward navigation is clamped to this root.
+  final String? rootPath;
+
   const FileFolderPicker({
     super.key,
     this.initialDirectory,
@@ -115,6 +123,8 @@ class FileFolderPicker extends StatefulWidget {
     this.extraLocations,
     this.onStateChanged,
     this.profileStorage,
+    this.showStorageBar = true,
+    this.rootPath,
   });
 
   /// Show the picker as a full-screen dialog
@@ -755,6 +765,12 @@ class FileFolderPickerState extends State<FileFolderPicker> {
       return;
     }
 
+    // Don't navigate above rootPath
+    if (widget.rootPath != null &&
+        _currentDirectory.path == widget.rootPath) {
+      return;
+    }
+
     final parent = _currentDirectory.parent;
     if (parent.path != _currentDirectory.path) {
       _navigateTo(parent);
@@ -1069,7 +1085,7 @@ class FileFolderPickerState extends State<FileFolderPicker> {
       body: Column(
         children: [
           // Storage locations
-          if (_storageLocations.isNotEmpty) _buildStorageBar(theme),
+          if (widget.showStorageBar && _storageLocations.isNotEmpty) _buildStorageBar(theme),
 
           // Navigation bar
           _buildNavigationBar(theme),
@@ -1244,8 +1260,16 @@ class FileFolderPickerState extends State<FileFolderPicker> {
       );
     }
 
-    final parts = _currentDirectory.path.split(Platform.pathSeparator);
+    var parts = _currentDirectory.path.split(Platform.pathSeparator);
     if (parts.first.isEmpty) parts[0] = '/';
+
+    // When rootPath is set, only show segments at or below the root.
+    int startIndex = 0;
+    if (widget.rootPath != null) {
+      final rootParts = widget.rootPath!.split(Platform.pathSeparator);
+      if (rootParts.first.isEmpty) rootParts[0] = '/';
+      startIndex = rootParts.length.clamp(0, parts.length);
+    }
 
     // Auto-scroll to show the last (deepest) folder
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1261,8 +1285,8 @@ class FileFolderPickerState extends State<FileFolderPicker> {
       scrollDirection: Axis.horizontal,
       child: Row(
         children: [
-          for (int i = 0; i < parts.length; i++) ...[
-            if (i > 0)
+          for (int i = startIndex; i < parts.length; i++) ...[
+            if (i > startIndex)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 2),
                 child: Icon(
@@ -1339,6 +1363,11 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     }
     // At filesystem root
     if (_currentDirectory.parent.path == _currentDirectory.path) {
+      return false;
+    }
+    // At rootPath boundary - don't navigate above it
+    if (widget.rootPath != null &&
+        _currentDirectory.path == widget.rootPath) {
       return false;
     }
     // At starting folder - don't navigate above it

@@ -11,6 +11,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart';
 import 'package:path/path.dart' as p;
+import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../services/app_service.dart';
@@ -449,12 +450,6 @@ class _WebsiteBrowserPageState extends State<WebsiteBrowserPage>
       ),
       child: InkWell(
         onTap: () => launchUrl(Uri.parse(publicUrl)),
-        onLongPress: () {
-          Clipboard.setData(ClipboardData(text: publicUrl));
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('URL copied to clipboard')),
-          );
-        },
         child: Row(
           children: [
             Icon(Icons.language, size: 20, color: theme.colorScheme.primary),
@@ -468,7 +463,28 @@ class _WebsiteBrowserPageState extends State<WebsiteBrowserPage>
                 overflow: TextOverflow.ellipsis,
               ),
             ),
-            Icon(Icons.open_in_new, size: 18, color: theme.colorScheme.onSurfaceVariant),
+            IconButton(
+              icon: const Icon(Icons.copy, size: 18),
+              tooltip: 'Copy URL',
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: publicUrl));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('URL copied to clipboard')),
+                );
+              },
+            ),
+            if (Platform.isAndroid || Platform.isIOS) ...[
+              const SizedBox(width: 8),
+              IconButton(
+                icon: const Icon(Icons.share, size: 18),
+                tooltip: 'Share URL',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                onPressed: () => Share.share(publicUrl),
+              ),
+            ],
           ],
         ),
       ),
@@ -519,13 +535,8 @@ class _WebsiteBrowserPageState extends State<WebsiteBrowserPage>
       allowMultiSelect: false,
       onStateChanged: () => setState(() {}),
       profileStorage: AppService().profileStorage,
-      extraLocations: [
-        StorageLocation(
-          name: ProfileService().getProfile().callsign,
-          path: widget.appPath,
-          icon: Icons.language,
-        ),
-      ],
+      showStorageBar: false,
+      rootPath: widget.appPath,
     );
   }
 
