@@ -98,6 +98,9 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
   // Syntax highlighting state
   String? _languageId;
 
+  // Active line number (0-indexed) for gutter highlight
+  int? _activeLine;
+
   // Scroll controllers for syncing editor line-number gutter
   final _editScrollController = ScrollController();
   final _gutterScrollController = ScrollController();
@@ -109,6 +112,37 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
         _editScrollController.offset.clamp(0.0, max),
       );
     }
+  }
+
+  /// Compute 0-indexed line number from a character offset in [text].
+  static int _lineFromOffset(String text, int offset) {
+    return '\n'.allMatches(text.substring(0, offset.clamp(0, text.length))).length;
+  }
+
+  /// Build gutter text with the active line highlighted.
+  Text _buildGutterText({
+    required int lineCount,
+    required int? activeLine,
+    required TextStyle? baseStyle,
+  }) {
+    final activeStyle = baseStyle?.copyWith(
+      color: Theme.of(context).colorScheme.onSurface,
+      fontWeight: FontWeight.w600,
+    );
+
+    final spans = <InlineSpan>[];
+    for (int i = 0; i < lineCount; i++) {
+      if (i > 0) spans.add(const TextSpan(text: '\n'));
+      spans.add(TextSpan(
+        text: '${i + 1}',
+        style: i == activeLine ? activeStyle : null,
+      ));
+    }
+
+    return Text.rich(
+      TextSpan(style: baseStyle, children: spans),
+      textAlign: TextAlign.right,
+    );
   }
 
   /// Create the appropriate controller for the current file.
@@ -155,6 +189,7 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
       _textContent = null;
       _isEditing = false;
       _hasUnsavedChanges = false;
+      _activeLine = null;
       _editController.dispose();
       _editController = _createController();
       _loadDocument();
@@ -483,29 +518,33 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Line number gutter — rebuilds only when line count changes
+            // Line number gutter — rebuilds on text/selection changes
             Padding(
               padding: const EdgeInsets.only(left: 16),
               child: ListenableBuilder(
                 listenable: _editController,
                 builder: (context, _) {
-                  final lineCount =
-                      '\n'.allMatches(_editController.text).length + 1;
+                  final text = _editController.text;
+                  final lineCount = '\n'.allMatches(text).length + 1;
                   final digits = lineCount.toString().length;
                   final gutterWidth = (digits < 2 ? 2 : digits) * 10.0 + 12.0;
-                  final gutterText = List.generate(
-                    lineCount, (i) => '${i + 1}',
-                  ).join('\n');
+
+                  // Active line from cursor position
+                  int? activeLine;
+                  final offset = _editController.selection.baseOffset;
+                  if (offset >= 0) {
+                    activeLine = _lineFromOffset(text, offset);
+                  }
 
                   return SizedBox(
                     width: gutterWidth,
                     child: SingleChildScrollView(
                       controller: _gutterScrollController,
                       physics: const NeverScrollableScrollPhysics(),
-                      child: Text(
-                        gutterText,
-                        style: gutterStyle,
-                        textAlign: TextAlign.right,
+                      child: _buildGutterText(
+                        lineCount: lineCount,
+                        activeLine: activeLine,
+                        baseStyle: gutterStyle,
                       ),
                     ),
                   );
@@ -744,29 +783,38 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
     final lineCount = '\n'.allMatches(content).length + 1;
     final digits = lineCount.toString().length;
     final gutterWidth = (digits < 2 ? 2 : digits) * 10.0 + 12.0;
-    final gutterText =
-        List.generate(lineCount, (i) => '${i + 1}').join('\n');
     final gutterStyle = monoStyle?.copyWith(
       color: appTheme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
     );
+    final lineHeight =
+        (monoStyle?.fontSize ?? 14.0) * (monoStyle?.height ?? 1.5);
 
     Widget wrapWithGutter(Widget textWidget) {
       return SingleChildScrollView(
         padding: const EdgeInsets.all(16),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: gutterWidth,
-              child: Text(
-                gutterText,
-                style: gutterStyle,
-                textAlign: TextAlign.right,
+        child: Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: (event) {
+            final line = (event.localPosition.dy / lineHeight).floor();
+            if (line >= 0 && line < lineCount && _activeLine != line) {
+              setState(() => _activeLine = line);
+            }
+          },
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: gutterWidth,
+                child: _buildGutterText(
+                  lineCount: lineCount,
+                  activeLine: _activeLine,
+                  baseStyle: gutterStyle,
+                ),
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(child: textWidget),
-          ],
+              const SizedBox(width: 12),
+              Expanded(child: textWidget),
+            ],
+          ),
         ),
       );
     }
