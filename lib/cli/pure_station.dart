@@ -34,6 +34,7 @@ import '../api/endpoints/chat_api_paths.dart';
 import '../util/chat_scripts.dart';
 import '../util/web_navigation.dart';
 import '../util/station_html_templates.dart';
+import '../util/html_utils.dart';
 import '../util/event_bus.dart';
 import '../util/reaction_utils.dart';
 import '../util/chat_format.dart';
@@ -5879,17 +5880,17 @@ class PureStationServer {
   /// Build HTML card for a single alert
   String _buildAlertCard(Map<String, dynamic> alert) {
     final severity = alert['severity'] as String;
-    final title = _escapeHtml(alert['title'] as String);
-    final type = _escapeHtml(alert['type'] as String);
+    final title = escapeHtml(alert['title'] as String);
+    final type = escapeHtml(alert['type'] as String);
     final created = alert['created'] as String;
-    final author = _escapeHtml(alert['author'] as String? ?? alert['callsign'] as String);
-    final description = _escapeHtml(alert['description'] as String);
+    final author = escapeHtml(alert['author'] as String? ?? alert['callsign'] as String);
+    final description = escapeHtml(alert['description'] as String);
     final address = alert['address'] as String?;
     final lat = alert['latitude'] as double;
     final lon = alert['longitude'] as double;
 
     final addressHtml = address != null && address.isNotEmpty
-        ? '<span>📍 ${_escapeHtml(address)}</span>'
+        ? '<span>📍 ${escapeHtml(address)}</span>'
         : '<span>📍 ${lat.toStringAsFixed(4)}, ${lon.toStringAsFixed(4)}</span>';
 
     return '''
@@ -7321,7 +7322,7 @@ class PureStationServer {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${_escapeHtml(post.title)} - $author</title>
+  <title>${escapeHtml(post.title)} - $author</title>
   <style>
     :root {
       --bg: #1a1a2e;
@@ -7404,12 +7405,12 @@ class PureStationServer {
 </head>
 <body>
   <header>
-    <h1>${_escapeHtml(post.title)}</h1>
+    <h1>${escapeHtml(post.title)}</h1>
     <div class="meta">
       <span>By <strong>$author</strong></span> ·
       <span>${post.displayDate}</span>
     </div>
-    ${post.description != null && post.description!.isNotEmpty ? '<div class="description">${_escapeHtml(post.description!)}</div>' : ''}
+    ${post.description != null && post.description!.isNotEmpty ? '<div class="description">${escapeHtml(post.description!)}</div>' : ''}
     $tagsHtml
   </header>
   <article>
@@ -7420,38 +7421,6 @@ class PureStationServer {
   </footer>
 </body>
 </html>''';
-  }
-
-  /// Escape HTML entities
-  String _escapeHtml(String text) {
-    return text
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#39;');
-  }
-
-  String _formatTimeAgo(DateTime? dateTime) {
-    if (dateTime == null) return 'unknown';
-    final now = DateTime.now();
-    final diff = now.difference(dateTime);
-
-    if (diff.inDays >= 30) {
-      final months = diff.inDays ~/ 30;
-      return '$months ${months == 1 ? 'month' : 'months'} ago';
-    } else if (diff.inDays >= 7) {
-      final weeks = diff.inDays ~/ 7;
-      return '$weeks ${weeks == 1 ? 'week' : 'weeks'} ago';
-    } else if (diff.inDays > 0) {
-      return '${diff.inDays} ${diff.inDays == 1 ? 'day' : 'days'} ago';
-    } else if (diff.inHours > 0) {
-      return '${diff.inHours} ${diff.inHours == 1 ? 'hour' : 'hours'} ago';
-    } else if (diff.inMinutes > 0) {
-      return '${diff.inMinutes} ${diff.inMinutes == 1 ? 'minute' : 'minutes'} ago';
-    } else {
-      return 'just now';
-    }
   }
 
   /// GET /{identifier} or /{identifier}/* - Serve WWW collection from device
@@ -7754,7 +7723,7 @@ class PureStationServer {
     final uptime = _startTime != null
         ? DateTime.now().difference(_startTime!).inMinutes
         : 0;
-    final uptimeStr = _formatUptimeFromMinutes(uptime);
+    final uptimeStr = formatUptimeFromMinutes(uptime);
 
     // Generate menu items for station navigation
     final homeMenuItems = WebNavigation.generateStationMenuItems(
@@ -7770,7 +7739,7 @@ class PureStationServer {
     for (final client in _clients.values) {
       final callsign = client.callsign ?? client.id;
       final nickname = client.nickname ?? callsign;
-      final connectedAgo = _formatTimeAgo(client.connectedAt);
+      final connectedAgo = formatTimeAgo(client.connectedAt);
       final location = (client.latitude != null && client.longitude != null)
           ? '${client.latitude!.toStringAsFixed(2)}, ${client.longitude!.toStringAsFixed(2)}'
           : '';
@@ -7798,7 +7767,7 @@ class PureStationServer {
 
       // Only show nickname if different from callsign
       final nicknameHtml = (nickname != callsign)
-          ? '<div class="device-nickname">${_escapeHtml(nickname)}</div>'
+          ? '<div class="device-nickname">${escapeHtml(nickname)}</div>'
           : '';
 
       devicesHtml.writeln('''
@@ -7822,7 +7791,7 @@ class PureStationServer {
 
     // Build devices JSON for map (with icon type)
     final devicesJson = devicesWithLocation.map((d) =>
-      '{"callsign":"${d['callsign']}","nickname":"${_escapeHtml(d['nickname'] as String)}","lat":${d['lat']},"lng":${d['lng']},"icon":"${d['icon']}"}'
+      '{"callsign":"${d['callsign']}","nickname":"${escapeHtml(d['nickname'] as String)}","lat":${d['lat']},"lng":${d['lng']},"icon":"${d['icon']}"}'
     ).join(',');
 
     final html = '''
@@ -8778,44 +8747,6 @@ ${WebNavigation.getHeaderNavCss()}
     );
   }
 
-  String _formatUptimeShort(int seconds) {
-    if (seconds < 60) return '${seconds}s';
-    if (seconds < 3600) return '${seconds ~/ 60}m';
-    if (seconds < 86400) return '${seconds ~/ 3600}h';
-    return '${seconds ~/ 86400}d';
-  }
-
-  String _formatUptimeLong(int seconds) {
-    if (seconds < 60) return '${seconds}s';
-
-    final days = seconds ~/ 86400;
-    final hours = (seconds % 86400) ~/ 3600;
-    final minutes = (seconds % 3600) ~/ 60;
-
-    final parts = <String>[];
-    if (days > 0) parts.add('${days}d');
-    if (hours > 0) parts.add('${hours}h');
-    if (minutes > 0 && days == 0) parts.add('${minutes}m');
-
-    return parts.isEmpty ? '0m' : parts.join(' ');
-  }
-
-  /// Format uptime from minutes to human readable string (e.g., "2 days 5 hours 30 minutes")
-  String _formatUptimeFromMinutes(int minutes) {
-    if (minutes < 1) return '0 minutes';
-
-    final days = minutes ~/ 1440; // 1440 minutes per day
-    final hours = (minutes % 1440) ~/ 60;
-    final mins = minutes % 60;
-
-    final parts = <String>[];
-    if (days > 0) parts.add('$days ${days == 1 ? 'day' : 'days'}');
-    if (hours > 0) parts.add('$hours ${hours == 1 ? 'hour' : 'hours'}');
-    if (mins > 0 && days == 0) parts.add('$mins ${mins == 1 ? 'minute' : 'minutes'}');
-
-    return parts.isEmpty ? '0 minutes' : parts.join(' ');
-  }
-
   /// Handle /chat page - shows station's chat rooms
   /// Reuses the same template pattern as remote device chat pages
   Future<void> _handleChatPage(HttpRequest request) async {
@@ -8856,8 +8787,8 @@ ${WebNavigation.getHeaderNavCss()}
         final isActive = room.id == defaultRoom;
         final roomName = room.name.isNotEmpty ? room.name : room.id;
         channelsHtml.writeln('''
-<div class="channel-item${isActive ? ' active' : ''}" data-room-id="${_escapeHtml(room.id)}">
-  <span class="channel-name">#${_escapeHtml(roomName)}</span>
+<div class="channel-item${isActive ? ' active' : ''}" data-room-id="${escapeHtml(room.id)}">
+  <span class="channel-name">#${escapeHtml(roomName)}</span>
 </div>''');
       }
     }
@@ -8883,11 +8814,11 @@ ${WebNavigation.getHeaderNavCss()}
             messagesHtml.writeln('<div class="date-separator">$msgDate</div>');
           }
 
-          final author = _escapeHtml(msg.senderCallsign);
-          final content = _escapeHtml(msg.content);
+          final author = escapeHtml(msg.senderCallsign);
+          final content = escapeHtml(msg.content);
 
           messagesHtml.writeln('''
-<div class="message" data-timestamp="${_escapeHtml(timestampStr)}">
+<div class="message" data-timestamp="${escapeHtml(timestampStr)}">
   <div class="message-header">
     <span class="message-author">$author</span>
     <span class="message-time">$msgTime</span>
@@ -8931,7 +8862,7 @@ ${WebNavigation.getHeaderNavCss()}
     if (template != null) {
       // Process template with variable substitution
       final variables = {
-        'TITLE': 'Chat - ${_escapeHtml(stationName)}',
+        'TITLE': 'Chat - ${escapeHtml(stationName)}',
         'GLOBAL_STYLES': globalStyles,
         'APP_STYLES': appStyles,
         'COLLECTION_NAME': stationName,
@@ -8956,7 +8887,7 @@ ${WebNavigation.getHeaderNavCss()}
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
-  <title>Chat - ${_escapeHtml(stationName)}</title>
+  <title>Chat - ${escapeHtml(stationName)}</title>
   <style>$globalStyles</style>
   <style>$appStyles</style>
 </head>

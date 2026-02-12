@@ -15,6 +15,7 @@ import '../platform/file_system_service.dart';
 import '../util/app_constants.dart';
 import '../util/nostr_key_generator.dart';
 import '../util/tlsh.dart';
+import '../util/html_utils.dart';
 import '../util/web_navigation.dart';
 import 'config_service.dart';
 import 'chat_service.dart';
@@ -306,8 +307,8 @@ class AppService {
 
       if (recentPosts.isNotEmpty) {
         for (final post in recentPosts) {
-          final title = _escapeHtml(post['title'] as String? ?? 'Untitled');
-          final excerpt = _escapeHtml(post['excerpt'] as String? ?? post['description'] as String? ?? '');
+          final title = escapeHtml(post['title'] as String? ?? 'Untitled');
+          final excerpt = escapeHtml(post['excerpt'] as String? ?? post['description'] as String? ?? '');
           final created = post['created'] as String? ?? '';
           final postId = post['id'] as String? ?? '';
 
@@ -570,8 +571,8 @@ class AppService {
         postsHtml.writeln('<div class="post"><p>No posts yet.</p></div>');
       } else {
         for (final post in publishedPosts) {
-          final title = _escapeHtml(post['title'] as String? ?? 'Untitled');
-          final excerpt = _escapeHtml(post['excerpt'] as String? ?? post['description'] as String? ?? '');
+          final title = escapeHtml(post['title'] as String? ?? 'Untitled');
+          final excerpt = escapeHtml(post['excerpt'] as String? ?? post['description'] as String? ?? '');
           final created = post['created'] as String? ?? '';
           final postId = post['id'] as String? ?? '';
 
@@ -740,8 +741,8 @@ class AppService {
       for (final channel in channels) {
         final isActive = channel.id == defaultRoom;
         channelsHtml.writeln('''
-<div class="channel-item${isActive ? ' active' : ''}" data-room-id="${_escapeHtml(channel.id)}">
-  <span class="channel-name">#${_escapeHtml(channel.name ?? channel.id)}</span>
+<div class="channel-item${isActive ? ' active' : ''}" data-room-id="${escapeHtml(channel.id)}">
+  <span class="channel-name">#${escapeHtml(channel.name ?? channel.id)}</span>
 </div>''');
       }
 
@@ -765,11 +766,11 @@ class AppService {
         final time = msg.timestamp.split(' ').length > 1
             ? msg.timestamp.split(' ')[1].replaceAll('_', ':').substring(0, 5)
             : '00:00';
-        final author = _escapeHtml(msg.author ?? 'anonymous');
-        final content = _escapeHtml(msg.content ?? '');
+        final author = escapeHtml(msg.author ?? 'anonymous');
+        final content = escapeHtml(msg.content ?? '');
 
         messagesHtml.writeln('''
-<div class="message" data-timestamp="${_escapeHtml(msg.timestamp)}">
+<div class="message" data-timestamp="${escapeHtml(msg.timestamp)}">
   <div class="message-header">
     <span class="message-author">$author</span>
     <span class="message-time">$time</span>
@@ -4828,9 +4829,9 @@ window.APP_DATA_FULL = $jsonData;
 
       buffer.writeln('''
         <div class="post-card">
-          <h3 class="post-card-title"><a href="${_escapeHtml(post['url'] ?? '')}">${_escapeHtml(post['title'] ?? 'Untitled')}</a></h3>
-          <p class="post-card-meta">${_escapeHtml(post['author'] ?? '')} &middot; $dateStr</p>
-          <p class="post-card-excerpt">${_escapeHtml(post['excerpt'] ?? '')}</p>
+          <h3 class="post-card-title"><a href="${escapeHtml(post['url'] ?? '')}">${escapeHtml(post['title'] ?? 'Untitled')}</a></h3>
+          <p class="post-card-meta">${escapeHtml(post['author'] ?? '')} &middot; $dateStr</p>
+          <p class="post-card-excerpt">${escapeHtml(post['excerpt'] ?? '')}</p>
         </div>
       ''');
     }
@@ -4860,8 +4861,8 @@ window.APP_DATA_FULL = $jsonData;
             <span class="event-date-month">$monthStr</span>
           </div>
           <div class="event-details">
-            <h3 class="event-title"><a href="${_escapeHtml(event['url'] ?? '')}">${_escapeHtml(event['title'] ?? 'Untitled')}</a></h3>
-            <p class="event-info">${_escapeHtml(event['location'] ?? '')}</p>
+            <h3 class="event-title"><a href="${escapeHtml(event['url'] ?? '')}">${escapeHtml(event['title'] ?? 'Untitled')}</a></h3>
+            <p class="event-info">${escapeHtml(event['location'] ?? '')}</p>
           </div>
         </div>
       ''');
@@ -4878,10 +4879,10 @@ window.APP_DATA_FULL = $jsonData;
     final buffer = StringBuffer();
     for (final room in rooms) {
       buffer.writeln('''
-        <a href="${_escapeHtml(room['url'] ?? '')}" class="chat-room-card">
+        <a href="${escapeHtml(room['url'] ?? '')}" class="chat-room-card">
           <div class="chat-room-icon">&#128172;</div>
           <div class="chat-room-info">
-            <div class="chat-room-name">${_escapeHtml(room['name'] ?? 'Unnamed')}</div>
+            <div class="chat-room-name">${escapeHtml(room['name'] ?? 'Unnamed')}</div>
           </div>
         </a>
       ''');
@@ -4905,12 +4906,4 @@ window.APP_DATA_FULL = $jsonData;
   }
 
   /// Escape HTML special characters
-  String _escapeHtml(String text) {
-    return text
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#39;');
-  }
 }

@@ -42,6 +42,7 @@ import '../util/alert_folder_utils.dart';
 import '../util/feedback_folder_utils.dart';
 import '../util/reaction_utils.dart';
 import '../util/event_bus.dart';
+import '../util/html_utils.dart';
 import '../util/station_html_templates.dart';
 import '../util/web_navigation.dart';
 import '../version.dart';
@@ -1785,7 +1786,7 @@ class StationServerService {
       final nickname = client.nickname ?? callsign;
       final connectionType = client.connectionType.name;
       final connectionLabel = _getConnectionTypeLabel(client.connectionType);
-      final connectedAgo = _formatTimeAgo(client.connectedAt);
+      final connectedAgo = formatTimeAgo(client.connectedAt);
       final location = (client.latitude != null && client.longitude != null)
           ? '${client.latitude!.toStringAsFixed(2)}, ${client.longitude!.toStringAsFixed(2)}'
           : '';
@@ -1796,7 +1797,7 @@ class StationServerService {
             <span class="device-callsign">$callsign</span>
             <span class="connection-badge $connectionType">$connectionLabel</span>
           </div>
-          <div class="device-nickname">${_escapeHtml(nickname)}</div>
+          <div class="device-nickname">${escapeHtml(nickname)}</div>
           <div class="device-meta">
             Connected since $connectedAgo${location.isNotEmpty ? ' · $location' : ''}
           </div>
@@ -2044,7 +2045,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
         <span class="separator">|</span>
         <a href="/download/">download</a>
       </nav>
-      <div class="logo">${_escapeHtml(stationName)}</div>
+      <div class="logo">${escapeHtml(stationName)}</div>
       <p class="subtitle">Geogram Relay Server</p>
     </header>
 
@@ -2065,7 +2066,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
           </div>
           <div class="info-item">
             <span class="info-label">Uptime</span>
-            <span class="info-value" id="uptime-value">${_formatUptimeFromMinutes(_startTime != null ? DateTime.now().difference(_startTime!).inMinutes : 0)}</span>
+            <span class="info-value" id="uptime-value">${formatUptimeFromMinutes(_startTime != null ? DateTime.now().difference(_startTime!).inMinutes : 0)}</span>
           </div>
           <div class="info-item">
             <span class="info-label">Status</span>
@@ -2270,60 +2271,6 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
       case ConnectionType.other:
         return 'Other';
     }
-  }
-
-  /// Format a DateTime as a human-readable time ago string
-  String _formatTimeAgo(DateTime dateTime) {
-    final now = DateTime.now();
-    final diff = now.difference(dateTime);
-
-    if (diff.inDays >= 30) {
-      final months = diff.inDays ~/ 30;
-      return '$months ${months == 1 ? 'month' : 'months'} ago';
-    } else if (diff.inDays >= 7) {
-      final weeks = diff.inDays ~/ 7;
-      return '$weeks ${weeks == 1 ? 'week' : 'weeks'} ago';
-    } else if (diff.inDays > 0) {
-      return '${diff.inDays} ${diff.inDays == 1 ? 'day' : 'days'} ago';
-    } else if (diff.inHours > 0) {
-      return '${diff.inHours} ${diff.inHours == 1 ? 'hour' : 'hours'} ago';
-    } else if (diff.inMinutes > 0) {
-      return '${diff.inMinutes} ${diff.inMinutes == 1 ? 'minute' : 'minutes'} ago';
-    } else {
-      return 'just now';
-    }
-  }
-
-  /// Format uptime in seconds to human readable string (e.g., "2d 5h 30m")
-  String _formatUptimeLong(int seconds) {
-    if (seconds < 60) return '${seconds}s';
-
-    final days = seconds ~/ 86400;
-    final hours = (seconds % 86400) ~/ 3600;
-    final minutes = (seconds % 3600) ~/ 60;
-
-    final parts = <String>[];
-    if (days > 0) parts.add('${days}d');
-    if (hours > 0) parts.add('${hours}h');
-    if (minutes > 0 && days == 0) parts.add('${minutes}m');
-
-    return parts.isEmpty ? '0m' : parts.join(' ');
-  }
-
-  /// Format uptime from minutes to human readable string (e.g., "2 days 5 hours 30 minutes")
-  String _formatUptimeFromMinutes(int minutes) {
-    if (minutes < 1) return '0 minutes';
-
-    final days = minutes ~/ 1440; // 1440 minutes per day
-    final hours = (minutes % 1440) ~/ 60;
-    final mins = minutes % 60;
-
-    final parts = <String>[];
-    if (days > 0) parts.add('$days ${days == 1 ? 'day' : 'days'}');
-    if (hours > 0) parts.add('$hours ${hours == 1 ? 'hour' : 'hours'}');
-    if (mins > 0 && days == 0) parts.add('$mins ${mins == 1 ? 'minute' : 'minutes'}');
-
-    return parts.isEmpty ? '0 minutes' : parts.join(' ');
   }
 
   Future<bool> _initializeChatServiceIfNeeded({bool createIfMissing = false}) async {
@@ -6569,7 +6516,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${_escapeHtml(post.title)} - $author</title>
+  <title>${escapeHtml(post.title)} - $author</title>
   <style>
     :root {
       --bg: #1a1a2e;
@@ -6703,12 +6650,12 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
 </head>
 <body>
   <div class="container">
-    <h1>${_escapeHtml(post.title)}</h1>
+    <h1>${escapeHtml(post.title)}</h1>
     <div class="meta">
-      <span>👤 ${_escapeHtml(post.author)}</span>
+      <span>👤 ${escapeHtml(post.author)}</span>
       <span>📅 ${post.displayDate} ${post.displayTime}</span>
     </div>
-    ${post.description != null && post.description!.isNotEmpty ? '<div class="description">${_escapeHtml(post.description!)}</div>' : ''}
+    ${post.description != null && post.description!.isNotEmpty ? '<div class="description">${escapeHtml(post.description!)}</div>' : ''}
     ${tagsHtml.isNotEmpty ? '<div class="tags">$tagsHtml</div>' : ''}
     <hr>
     <div class="content">
@@ -6731,10 +6678,10 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
   </div>
 <script>
 (function() {
-  const postId = '${_escapeHtml(post.id)}';
-  const authorNpub = '${_escapeHtml(post.npub ?? '')}';
+  const postId = '${escapeHtml(post.id)}';
+  const authorNpub = '${escapeHtml(post.npub ?? '')}';
   const apiBase = '../api/blog';
-  const likedPubkeys = ${_toJsonArray(likedHexPubkeys)};
+  const likedPubkeys = ${toJsonArray(likedHexPubkeys)};
   let userPubkey = null;
   let isLiked = false;
 
@@ -6850,23 +6797,6 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
 </body>
 </html>
 ''';
-  }
-
-  /// Escape HTML special characters
-  String _escapeHtml(String text) {
-    return text
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#39;');
-  }
-
-  /// Convert a list of strings to a JavaScript array literal
-  String _toJsonArray(List<String> items) {
-    if (items.isEmpty) return '[]';
-    final escaped = items.map((s) => '"${s.replaceAll('"', '\\"')}"').join(',');
-    return '[$escaped]';
   }
 
   /// Handle DM sync API requests

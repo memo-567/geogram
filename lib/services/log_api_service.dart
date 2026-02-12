@@ -28,6 +28,7 @@ import '../connection/connection_manager.dart';
 import '../version.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_message.dart';
+import '../util/html_utils.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
 import '../util/reaction_utils.dart';
@@ -11927,7 +11928,7 @@ ul, ol { margin-left: 30px; padding: 0; }
     buffer.writeln('<head>');
     buffer.writeln('  <meta charset="UTF-8">');
     buffer.writeln('  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">');
-    buffer.writeln('  <title>${_escapeHtml(post.title)} - ${_escapeHtml(authorIdentifier)}</title>');
+    buffer.writeln('  <title>${escapeHtml(post.title)} - ${escapeHtml(authorIdentifier)}</title>');
     buffer.writeln('  <style>$globalStyles</style>');
     buffer.writeln('  <style>$appStyles</style>');
     buffer.writeln('</head>');
@@ -11939,7 +11940,7 @@ ul, ol { margin-left: 30px; padding: 0; }
     buffer.writeln('    <div class="header__inner">');
     buffer.writeln('      <div class="header__logo">');
     buffer.writeln('        <a href="../" style="text-decoration: none;">');
-    buffer.writeln('          <div class="logo">${_escapeHtml(authorIdentifier)}</div>');
+    buffer.writeln('          <div class="logo">${escapeHtml(authorIdentifier)}</div>');
     buffer.writeln('        </a>');
     buffer.writeln('      </div>');
     buffer.writeln('    </div>');
@@ -11957,7 +11958,7 @@ ul, ol { margin-left: 30px; padding: 0; }
     buffer.writeln('    <div class="post">');
 
     // Post title
-    buffer.writeln('      <h1 class="post-title"><a href="#">${_escapeHtml(post.title)}</a></h1>');
+    buffer.writeln('      <h1 class="post-title"><a href="#">${escapeHtml(post.title)}</a></h1>');
 
     // Meta
     buffer.writeln('      <div class="post-meta-inline">');
@@ -11969,7 +11970,7 @@ ul, ol { margin-left: 30px; padding: 0; }
       buffer.writeln('      <span class="post-tags-inline">');
       buffer.writeln('        :: tags:&nbsp;');
       for (final tag in post.tags) {
-        buffer.writeln('        <a class="post-tag" href="#">#${_escapeHtml(tag)}</a>&nbsp;');
+        buffer.writeln('        <a class="post-tag" href="#">#${escapeHtml(tag)}</a>&nbsp;');
       }
       buffer.writeln('      </span>');
     }
@@ -11979,7 +11980,7 @@ ul, ol { margin-left: 30px; padding: 0; }
     final paragraphs = post.content.split('\n\n');
     for (final para in paragraphs) {
       if (para.trim().isNotEmpty) {
-        buffer.writeln('        <p>${_escapeHtml(para.trim())}</p>');
+        buffer.writeln('        <p>${escapeHtml(para.trim())}</p>');
       }
     }
     buffer.writeln('      </div>');
@@ -11991,10 +11992,10 @@ ul, ol { margin-left: 30px; padding: 0; }
       for (final comment in post.comments) {
         buffer.writeln('        <div class="comment">');
         buffer.writeln('          <div class="comment-meta">');
-        buffer.writeln('            <span class="comment-author">${_escapeHtml(comment.author)}</span>');
+        buffer.writeln('            <span class="comment-author">${escapeHtml(comment.author)}</span>');
         buffer.writeln('            <span class="comment-date">${comment.displayDate}</span>');
         buffer.writeln('          </div>');
-        buffer.writeln('          <p>${_escapeHtml(comment.content)}</p>');
+        buffer.writeln('          <p>${escapeHtml(comment.content)}</p>');
         buffer.writeln('        </div>');
       }
       buffer.writeln('      </div>');
@@ -12036,15 +12037,15 @@ ul, ol { margin-left: 30px; padding: 0; }
     buffer.writeln('</div>');
 
     // NOSTR likes JavaScript
-    final postId = _escapeHtml(post.id);
-    final authorNpub = _escapeHtml(post.npub ?? '');
+    final postId = escapeHtml(post.id);
+    final authorNpub = escapeHtml(post.npub ?? '');
     buffer.writeln('''
 <script>
 (function() {
   const postId = '$postId';
   const authorNpub = '$authorNpub';
   const apiBase = '../api/blog';
-  const likedPubkeys = ${_toJsonArray(likedHexPubkeys)};
+  const likedPubkeys = ${toJsonArray(likedHexPubkeys)};
   let userPubkey = null;
   let isLiked = false;
 
@@ -12169,22 +12170,6 @@ ul, ol { margin-left: 30px; padding: 0; }
     return buffer.toString();
   }
 
-  /// Escape HTML special characters
-  String _escapeHtml(String text) {
-    return text
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#39;');
-  }
-
-  /// Convert a list of strings to a JavaScript array literal
-  String _toJsonArray(List<String> items) {
-    if (items.isEmpty) return '[]';
-    final escaped = items.map((s) => '"${s.replaceAll('"', '\\"')}"').join(',');
-    return '[$escaped]';
-  }
 
   // ============ Wallet API Handlers ============
 

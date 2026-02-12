@@ -23,6 +23,7 @@ import '../services/station_service.dart';
 import '../services/storage_config.dart';
 import '../services/webrtc_config.dart';
 import '../services/profile_storage.dart';
+import '../util/html_utils.dart';
 import '../util/nostr_event.dart';
 import '../util/tlsh.dart';
 import '../util/event_bus.dart';
@@ -1106,7 +1107,7 @@ class WebSocketService {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${_escapeHtml(post.title)} - $author</title>
+  <title>${escapeHtml(post.title)} - $author</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -1206,7 +1207,7 @@ class WebSocketService {
 </head>
 <body>
   <article>
-    <h1>${_escapeHtml(post.title)}</h1>
+    <h1>${escapeHtml(post.title)}</h1>
     <div class="meta">
       <span>By <strong>$author</strong></span>
       <span> · </span>
@@ -1232,10 +1233,10 @@ class WebSocketService {
   </footer>
 <script>
 (function() {
-  const postId = '${_escapeHtml(post.id)}';
-  const authorNpub = '${_escapeHtml(post.npub ?? '')}';
+  const postId = '${escapeHtml(post.id)}';
+  const authorNpub = '${escapeHtml(post.npub ?? '')}';
   const apiBase = '../api/blog';
-  const likedPubkeys = ${_toJsonArray(likedHexPubkeys)};
+  const likedPubkeys = ${toJsonArray(likedHexPubkeys)};
   let userPubkey = null;
   let isLiked = false;
 
@@ -1352,22 +1353,6 @@ class WebSocketService {
 </html>''';
   }
 
-  /// Escape HTML special characters
-  String _escapeHtml(String text) {
-    return text
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#39;');
-  }
-
-  /// Convert a list of strings to a JavaScript array literal
-  String _toJsonArray(List<String> items) {
-    if (items.isEmpty) return '[]';
-    final escaped = items.map((s) => '"${s.replaceAll('"', '\\"')}"').join(',');
-    return '[$escaped]';
-  }
 
   /// Send HTTP response to station
   void _sendHttpResponse(

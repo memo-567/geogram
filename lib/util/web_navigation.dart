@@ -132,7 +132,7 @@ class WebNavigation {
     'chat': NavItem(id: 'chat', label: 'chat', path: '/chat/'),
     'events': NavItem(id: 'events', label: 'events', path: '/events/'),
     'places': NavItem(id: 'places', label: 'places', path: '/places/'),
-    'shared_folder': NavItem(id: 'shared_folder', label: 'shared_folder', path: '/shared_folder/'),
+    'files': NavItem(id: 'files', label: 'files', path: '/files/'),
     'alerts': NavItem(id: 'alerts', label: 'alerts', path: '/alerts/'),
     'download': NavItem(id: 'download', label: 'download', path: '/download/'),
   };
