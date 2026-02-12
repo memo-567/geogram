@@ -69,7 +69,8 @@ Name=$APP_NAME
 Comment=Resilient, Decentralized Communication
 Exec=$BUNDLE_DIR/geogram
 Icon=$APP_ID
-Categories=Network;Communication;
+Categories=Network;InstantMessaging;
+Keywords=geo;geogram;chat;mesh;radio;offline;
 Terminal=false
 StartupWMClass=$APP_ID
 EOF
