@@ -65,6 +65,8 @@ static void my_application_activate(GApplication* application) {
       g_warning("Failed to set window icon: %s", icon_error->message);
     }
   }
+  // Also set the themed icon name so GTK can find it via XDG hicolor theme
+  gtk_window_set_icon_name(window, "geogram.radio");
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   fl_dart_project_set_dart_entrypoint_arguments(

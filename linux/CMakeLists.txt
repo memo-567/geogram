@@ -12,7 +12,7 @@ set(ONNXRUNTIME_VERSION "1.21.1" CACHE STRING "ONNX Runtime version" FORCE)
 set(BINARY_NAME "geogram")
 # The unique GTK application identifier for this application. See:
 # https://wiki.gnome.org/HowDoI/ChooseApplicationID
-set(APPLICATION_ID "dev.geogram")
+set(APPLICATION_ID "geogram.radio")
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.
@@ -112,8 +112,21 @@ install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/data/app_icon.png"
   COMPONENT Runtime)
 
 # Install desktop file
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/data/dev.geogram.desktop"
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/data/geogram.radio.desktop"
   DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
+  COMPONENT Runtime)
+
+# Install multi-size icons for XDG desktop integration
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/icons/"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/icons"
+  COMPONENT Runtime)
+
+# Install desktop integration scripts
+install(PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/install-desktop.sh"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}"
+  COMPONENT Runtime)
+install(PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/uninstall-desktop.sh"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}"
   COMPONENT Runtime)
 
 install(FILES "${FLUTTER_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
