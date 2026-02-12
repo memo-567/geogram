@@ -14,6 +14,7 @@ import 'station_client.dart';
 import 'station_tile_cache.dart';
 import 'station_stats.dart';
 import '../util/event_bus.dart';
+import '../services/email_relay_service.dart';
 import '../services/nostr_blossom_service.dart';
 import '../services/nostr_relay_service.dart';
 import '../services/nostr_relay_storage.dart';
@@ -539,6 +540,9 @@ abstract class StationServerBase {
           case 'HTTP_RESPONSE':
             _handleHttpResponse(message);
             break;
+          case 'email_send':
+            _handleEmailSend(client, message);
+            break;
           case 'backup_provider_announce':
             _handleBackupProviderAnnounce(client, message);
             break;
@@ -689,6 +693,22 @@ abstract class StationServerBase {
     };
     client.socket.add(jsonEncode(response));
     log('INFO', 'Hello from: ${client.callsign ?? "unknown"} (${client.deviceType ?? "unknown"})');
+
+    // Deliver pending internal emails
+    if (callsign != null) {
+      EmailRelayService().deliverPendingEmails(
+        clientId: client.id,
+        callsign: callsign,
+        sendToClient: (targetId, msg) {
+          final target = _clients[targetId];
+          return target != null ? safeSocketSend(target, msg) : false;
+        },
+        getStationDomain: () => _settings.sslDomain ?? _settings.callsign.toLowerCase(),
+      );
+
+      // Deliver cached encrypted emails (from offline SMTP delivery)
+      _deliverCachedEmails(client);
+    }
   }
 
   void _handleHttpResponse(Map<String, dynamic> message) {
@@ -716,6 +736,57 @@ abstract class StationServerBase {
     );
     _backupProviders[callsign.toUpperCase()] = entry;
     log('INFO', 'Backup provider registered: $callsign');
+  }
+
+  /// Handle email_send WebSocket message
+  void _handleEmailSend(StationClient client, Map<String, dynamic> message) {
+    if (client.callsign == null) {
+      log('WARN', 'email_send from unauthenticated client ${client.id}');
+      return;
+    }
+
+    EmailRelayService().handleEmailSend(
+      message: message,
+      senderCallsign: client.callsign!,
+      senderId: client.id,
+      sendToClient: (clientId, msg) {
+        final target = _clients[clientId];
+        return target != null ? safeSocketSend(target, msg) : false;
+      },
+      findClientByCallsign: _findClientByCallsign,
+      getStationDomain: () => _settings.sslDomain ?? _settings.callsign.toLowerCase(),
+    );
+  }
+
+  /// Find a connected client by callsign
+  String? _findClientByCallsign(String callsign) {
+    for (final entry in _clients.entries) {
+      if (entry.value.callsign?.toUpperCase() == callsign.toUpperCase()) {
+        return entry.key;
+      }
+    }
+    return null;
+  }
+
+  /// Deliver cached encrypted emails when a client connects
+  Future<void> _deliverCachedEmails(StationClient client) async {
+    if (client.callsign == null) return;
+
+    try {
+      final blobs = await EmailRelayService().retrieveAndClearCache(client.callsign!);
+      for (final blob in blobs) {
+        final message = {
+          'type': 'email_receive_encrypted',
+          'encrypted_content': base64Encode(blob),
+        };
+        safeSocketSend(client, jsonEncode(message));
+      }
+      if (blobs.isNotEmpty) {
+        log('INFO', 'Delivered ${blobs.length} cached encrypted email(s) to ${client.callsign}');
+      }
+    } catch (e) {
+      log('ERROR', 'Failed to deliver cached emails to ${client.callsign}: $e');
+    }
   }
 
   void _removeClient(String clientId, {String reason = 'disconnected'}) {

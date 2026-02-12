@@ -16,6 +16,7 @@ import 'dart:typed_data';
 import '../models/email_account.dart';
 import '../models/email_message.dart';
 import '../models/email_thread.dart';
+import '../util/backup_encryption.dart';
 import '../util/email_format.dart';
 import '../util/event_bus.dart';
 import '../util/nostr_crypto.dart';
@@ -345,6 +346,20 @@ class EmailService {
     } catch (e) {
       return null;
     }
+  }
+
+  /// Find an existing thread by threadId across inbox and sent folders
+  Future<EmailThread?> _findThreadById(String threadId) async {
+    // Search inbox and sent folders for matching threadId
+    for (final folder in ['inbox', 'sent']) {
+      final threads = await listThreads(folder);
+      for (final thread in threads) {
+        if (thread.threadId == threadId) {
+          return thread;
+        }
+      }
+    }
+    return null;
   }
 
   /// Get inbox threads (unified)
@@ -929,6 +944,49 @@ class EmailService {
         content = contentB64; // Already plain text
       }
 
+      // Extract sender callsign for message author
+      final senderCallsign = from.contains('@')
+          ? from.split('@').first.toUpperCase()
+          : from.toUpperCase();
+
+      // Try to find existing thread by threadId (for reply appending)
+      EmailThread? existingThread = await _findThreadById(threadId);
+
+      if (existingThread != null) {
+        // Append new message to existing thread
+        final timestamp = DateTime.now();
+        final created = '${timestamp.year}-${timestamp.month.toString().padLeft(2, '0')}-${timestamp.day.toString().padLeft(2, '0')} '
+            '${timestamp.hour.toString().padLeft(2, '0')}:${timestamp.minute.toString().padLeft(2, '0')}_'
+            '${timestamp.second.toString().padLeft(2, '0')}';
+
+        final emailMessage = EmailMessage(
+          author: senderCallsign,
+          timestamp: created,
+          content: content,
+          metadata: {},
+        );
+
+        if (event != null) {
+          emailMessage.metadata['event_id'] = event['id'] as String? ?? '';
+          emailMessage.metadata['npub'] = event['pubkey'] as String? ?? '';
+          emailMessage.metadata['signature'] = event['sig'] as String? ?? '';
+        }
+
+        existingThread.addMessage(emailMessage);
+        await saveThread(existingThread);
+
+        LogService().log('EmailService: Appended reply from $from to existing thread $threadId');
+
+        _eventController.add(EmailChangeEvent(
+          existingThread.station,
+          threadId,
+          EmailChangeType.received,
+        ));
+
+        return true;
+      }
+
+      // No existing thread found - create new one
       // Parse the thread content
       EmailThread? thread = EmailFormat.parse(content);
 
@@ -956,11 +1014,6 @@ class EmailService {
           threadId: threadId,
           messages: [],
         );
-
-        // Extract sender callsign for message author
-        final senderCallsign = from.contains('@')
-            ? from.split('@').first.toUpperCase()
-            : from.toUpperCase();
 
         // Create the message
         final emailMessage = EmailMessage(
@@ -998,6 +1051,43 @@ class EmailService {
       return true;
     } catch (e, stack) {
       LogService().log('EmailService: Error receiving email: $e\n$stack');
+      return false;
+    }
+  }
+
+  /// Receive an encrypted cached email (was offline when originally sent)
+  ///
+  /// Decrypts with the user's nsec and delegates to receiveEmail().
+  Future<bool> receiveEncryptedEmail(Map<String, dynamic> message) async {
+    try {
+      final encryptedB64 = message['encrypted_content'] as String?;
+      if (encryptedB64 == null) {
+        LogService().log('EmailService: Missing encrypted_content in email_receive_encrypted');
+        return false;
+      }
+
+      final profile = ProfileService().getProfile();
+      if (profile.nsec.isEmpty) {
+        LogService().log('EmailService: Cannot decrypt cached email - no nsec available');
+        return false;
+      }
+
+      // Decode and decrypt
+      final encryptedBytes = base64Decode(encryptedB64);
+      final decryptedBytes = BackupEncryption.decryptFile(
+        Uint8List.fromList(encryptedBytes),
+        profile.nsec,
+      );
+
+      // Parse decrypted JSON as email message
+      final decryptedJson = jsonDecode(utf8.decode(decryptedBytes)) as Map<String, dynamic>;
+
+      LogService().log('EmailService: Decrypted cached email from ${decryptedJson['from']}');
+
+      // Delegate to standard receiveEmail logic
+      return await receiveEmail(decryptedJson);
+    } catch (e, stack) {
+      LogService().log('EmailService: Error decrypting cached email: $e\n$stack');
       return false;
     }
   }

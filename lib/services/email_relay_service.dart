@@ -53,13 +53,20 @@
  */
 
 import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:sqlite3/sqlite3.dart' as sqlite;
+
+import '../util/backup_encryption.dart';
 import '../util/email_format.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
 import 'log_service.dart';
 import 'nip05_registry_service.dart';
 import 'smtp_client.dart' show SMTPClient, DkimConfig, SMTPRelayConfig;
+import 'smtp_server.dart' show MIMEParser;
+import 'storage_config.dart';
 
 /// Callback type for sending messages to clients
 typedef SendToClientCallback = bool Function(String clientId, String message);
@@ -69,6 +76,9 @@ typedef FindClientByCallsignCallback = String? Function(String callsign);
 
 /// Callback type for getting station domain
 typedef GetStationDomainCallback = String Function();
+
+/// Callback type for getting a client's npub by callsign
+typedef GetClientNpubCallback = String? Function(String callsign);
 
 /// Pending email entry
 class PendingEmail {
@@ -189,6 +199,15 @@ class EmailRelayService {
   /// Blocklist of sender callsigns that are banned from sending external emails
   /// TODO: Persist this to disk and provide admin UI to manage
   final Set<String> _externalEmailBlocklist = {};
+
+  /// Outgoing Message-ID -> threadId mapping for reply matching
+  final Map<String, String> _outgoingMessageIds = {};
+
+  /// Normalized subject -> threadId mapping for reply matching
+  final Map<String, String> _outgoingSubjects = {};
+
+  /// Maximum cache size per recipient (10 MB)
+  static const int _maxCacheSizeBytes = 10 * 1024 * 1024;
 
   /// Email relay settings
   EmailRelaySettings settings = EmailRelaySettings();
@@ -324,19 +343,38 @@ class EmailRelayService {
     LogService().log('SMTP: Sending external email from $fromEmail to ${entry.externalRecipients.join(", ")}');
 
     try {
+      // Build extra headers including reply threading
+      final extraHeaders = <String, String>{
+        'X-Geogram-Thread-ID': entry.threadId,
+        'X-Geogram-Sender-Npub': entry.senderNpub,
+      };
+
+      // Add In-Reply-To/References if this thread has previous external messages
+      final lastExternalMessageId = _outgoingMessageIds.entries
+          .where((e) => e.value == entry.threadId)
+          .map((e) => e.key)
+          .lastOrNull;
+      if (lastExternalMessageId != null) {
+        extraHeaders['In-Reply-To'] = lastExternalMessageId;
+        extraHeaders['References'] = lastExternalMessageId;
+      }
+
       final result = await client.send(
         from: fromEmail,
         to: entry.externalRecipients,
         subject: entry.subject,
         body: body,
-        extraHeaders: {
-          'X-Geogram-Thread-ID': entry.threadId,
-          'X-Geogram-Sender-Npub': entry.senderNpub,
-        },
+        extraHeaders: extraHeaders,
       );
 
       if (result.success) {
         entry.status = ExternalEmailStatus.sent;
+
+        // Track outgoing email for reply matching
+        trackOutgoingEmail(
+          threadId: entry.threadId,
+          subject: entry.subject,
+        );
         LogService().log('SMTP: Successfully sent external email: ${entry.id} (${result.message})');
 
         // Send DSN to notify sender of successful delivery
@@ -516,6 +554,228 @@ class EmailRelayService {
     }
     if (toRemove.isNotEmpty) {
       LogService().log('Cleaned up ${toRemove.length} external email queue entries');
+    }
+  }
+
+  // ============================================================
+  // Encrypted Email Cache (for offline recipients)
+  // ============================================================
+
+  String _getCachePath(String callsign) {
+    return '${StorageConfig().emailCacheDir}/${callsign.toUpperCase()}.db';
+  }
+
+  /// Cache an email for an offline recipient (encrypted with their npub)
+  Future<bool> cacheEmailForRecipient({
+    required String recipientCallsign,
+    required String recipientNpub,
+    required Map<String, dynamic> emailMessage,
+  }) async {
+    final cachePath = _getCachePath(recipientCallsign);
+
+    // Check size limit
+    final cacheFile = File(cachePath);
+    if (await cacheFile.exists() && (await cacheFile.stat()).size >= _maxCacheSizeBytes) {
+      LogService().log('Email cache full for $recipientCallsign (10 MB limit)');
+      return false;
+    }
+
+    // Encrypt the email content with recipient's npub (ECIES)
+    final jsonBytes = Uint8List.fromList(utf8.encode(jsonEncode(emailMessage)));
+    final encrypted = BackupEncryption.encryptFile(jsonBytes, recipientNpub);
+
+    // Open/create SQLite database
+    await Directory(StorageConfig().emailCacheDir).create(recursive: true);
+    final db = sqlite.sqlite3.open(cachePath);
+    try {
+      db.execute('''
+        CREATE TABLE IF NOT EXISTS cached_emails (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          encrypted_content BLOB NOT NULL,
+          created_at INTEGER NOT NULL
+        )
+      ''');
+      db.execute(
+        'INSERT INTO cached_emails (encrypted_content, created_at) VALUES (?, ?)',
+        [encrypted, DateTime.now().millisecondsSinceEpoch],
+      );
+      LogService().log('Cached encrypted email for offline recipient $recipientCallsign');
+      return true;
+    } finally {
+      db.dispose();
+    }
+  }
+
+  /// Retrieve all cached encrypted emails for a recipient, then clear the cache
+  Future<List<Uint8List>> retrieveAndClearCache(String recipientCallsign) async {
+    final cachePath = _getCachePath(recipientCallsign);
+    if (!await File(cachePath).exists()) return [];
+
+    final db = sqlite.sqlite3.open(cachePath);
+    final blobs = <Uint8List>[];
+    try {
+      final results = db.select(
+        'SELECT encrypted_content FROM cached_emails ORDER BY created_at',
+      );
+      for (final row in results) {
+        blobs.add(row['encrypted_content'] as Uint8List);
+      }
+    } finally {
+      db.dispose();
+    }
+
+    // Delete the cache file after retrieval
+    if (blobs.isNotEmpty) {
+      await File(cachePath).delete();
+      LogService().log('Delivered ${blobs.length} cached email(s) to $recipientCallsign');
+    }
+    return blobs;
+  }
+
+  // ============================================================
+  // Incoming Email Handling (SMTP -> WebSocket)
+  // ============================================================
+
+  /// Handle an incoming email from external SMTP
+  /// Parses MIME, matches reply threads, and delivers to connected clients
+  /// or caches encrypted for offline recipients.
+  Future<bool> handleIncomingEmail({
+    required String from,
+    required List<String> to,
+    required String rawMessage,
+    required SendToClientCallback sendToClient,
+    required FindClientByCallsignCallback findClientByCallsign,
+    required GetClientNpubCallback getClientNpub,
+    required GetStationDomainCallback getStationDomain,
+  }) async {
+    try {
+      final parser = MIMEParser(rawMessage);
+      final senderEmail = MIMEParser.extractEmail(parser.from) ?? from;
+      final subject = parser.subject ?? '(No Subject)';
+
+      // Reply thread matching (priority order)
+      String threadId;
+
+      // 1. Custom header from our outgoing emails
+      final customThreadId = parser.headers['x-geogram-thread-id'];
+      if (customThreadId != null && customThreadId.isNotEmpty) {
+        threadId = customThreadId;
+      }
+      // 2. In-Reply-To header -> look up in outgoing message IDs
+      else if (parser.inReplyTo != null && _outgoingMessageIds.containsKey(parser.inReplyTo)) {
+        threadId = _outgoingMessageIds[parser.inReplyTo]!;
+      }
+      // 3. References header -> check each reference
+      else if (parser.references != null) {
+        final refs = parser.references!.split(RegExp(r'\s+'));
+        threadId = refs
+            .where((ref) => _outgoingMessageIds.containsKey(ref))
+            .map((ref) => _outgoingMessageIds[ref]!)
+            .firstOrNull ?? _matchBySubject(subject) ?? 'ext_${(parser.messageId ?? senderEmail).hashCode.abs()}';
+      }
+      // 4. Subject matching
+      else {
+        threadId = _matchBySubject(subject) ?? 'ext_${(parser.messageId ?? senderEmail).hashCode.abs()}';
+      }
+
+      // Track incoming Message-ID for future reference chain
+      if (parser.messageId != null) {
+        _outgoingMessageIds[parser.messageId!] = threadId;
+      }
+
+      // Build email_receive message
+      final emailMessage = <String, dynamic>{
+        'type': 'email_receive',
+        'from': senderEmail,
+        'thread_id': threadId,
+        'subject': subject,
+        'content': base64Encode(utf8.encode(parser.body)),
+        'delivered_at': DateTime.now().toUtc().toIso8601String(),
+        'external_message_id': parser.messageId,
+      };
+
+      bool anyDelivered = false;
+
+      // Deliver to each local recipient
+      for (final recipientAddr in to) {
+        final callsign = _extractCallsign(recipientAddr);
+        final clientId = findClientByCallsign(callsign);
+
+        if (clientId != null) {
+          // Online: deliver immediately via WebSocket
+          if (sendToClient(clientId, jsonEncode(emailMessage))) {
+            anyDelivered = true;
+            LogService().log('External email delivered: $senderEmail -> $callsign (thread: $threadId)');
+          }
+        } else {
+          // Offline: encrypt and cache
+          final npub = getClientNpub(callsign);
+          if (npub != null) {
+            final cached = await cacheEmailForRecipient(
+              recipientCallsign: callsign,
+              recipientNpub: npub,
+              emailMessage: emailMessage,
+            );
+            if (cached) {
+              anyDelivered = true;
+              LogService().log('External email cached for offline recipient: $callsign');
+            }
+          } else {
+            LogService().log('Cannot deliver email to $callsign: not connected and no npub available');
+          }
+        }
+      }
+
+      return anyDelivered;
+    } catch (e) {
+      LogService().log('Error handling incoming email: $e');
+      return false;
+    }
+  }
+
+  /// Match a subject line against outgoing subjects (stripping Re:/Fwd: prefixes)
+  String? _matchBySubject(String subject) {
+    final normalized = _normalizeSubject(subject);
+    return _outgoingSubjects[normalized];
+  }
+
+  /// Normalize subject by stripping Re:/Fwd: prefixes
+  static String _normalizeSubject(String subject) {
+    return subject
+        .replaceAll(RegExp(r'^(Re|Fwd|Fw):\s*', caseSensitive: false), '')
+        .trim()
+        .toLowerCase();
+  }
+
+  /// Track outgoing Message-ID and subject for reply matching
+  void trackOutgoingEmail({
+    required String threadId,
+    required String subject,
+    String? messageId,
+  }) {
+    if (messageId != null) {
+      _outgoingMessageIds[messageId] = threadId;
+    }
+    final normalized = _normalizeSubject(subject);
+    if (normalized.isNotEmpty) {
+      _outgoingSubjects[normalized] = threadId;
+    }
+  }
+
+  /// Clean up old tracking entries (call periodically)
+  void cleanupTrackingEntries() {
+    // Keep tracking maps reasonable size (max 1000 entries each)
+    if (_outgoingMessageIds.length > 1000) {
+      final keysToRemove = _outgoingMessageIds.keys.take(_outgoingMessageIds.length - 500).toList();
+      for (final key in keysToRemove) {
+        _outgoingMessageIds.remove(key);
+      }
+    }
+    if (_outgoingSubjects.length > 1000) {
+      final keysToRemove = _outgoingSubjects.keys.take(_outgoingSubjects.length - 500).toList();
+      for (final key in keysToRemove) {
+        _outgoingSubjects.remove(key);
+      }
     }
   }
 

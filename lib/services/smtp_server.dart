@@ -514,6 +514,8 @@ class MIMEParser {
   String? get date => headers['date'];
   String? get messageId => headers['message-id'];
   String? get contentType => headers['content-type'];
+  String? get inReplyTo => headers['in-reply-to'];
+  String? get references => headers['references'];
 
   /// Extract email address from header value
   static String? extractEmail(String? headerValue) {

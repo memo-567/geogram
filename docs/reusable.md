@@ -79,6 +79,9 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [GeogramApi](#geogramapi) - Unified transport-agnostic API facade
 - [FileBrowserCacheService](#filebrowsercacheservice) - Persistent cache for file browser operations
 - [SQLiteLoader](#sqliteloader) - Platform-aware SQLite database loading
+- [BackupEncryption (ECIES)](#backupencryption-ecies) - ECIES encryption for arbitrary data using npub/nsec
+- [EmailRelayService Callbacks](#emailrelayservice-callbacks) - Reusable callback pattern for email routing
+- [EmailRelayService Encrypted Cache](#emailrelayservice-encrypted-cache) - SQLite + ECIES offline email storage
 - [ProfileStorage](#profilestorage) - Abstraction layer for encrypted/filesystem storage
 - [TrayService](#trayservice) - System tray icon with minimize-to-tray and restore
 
@@ -7046,6 +7049,67 @@ db.dispose();
 - `lib/services/nostr_relay_storage.dart` - NOSTR relay storage
 - `lib/services/nostr_blossom_service.dart` - Blossom blob storage
 - `packages/encrypted_archive/lib/src/sqlite_loader.dart` - Encrypted archive package
+
+---
+
+## BackupEncryption (ECIES)
+
+ECIES encryption (secp256k1 + HKDF-SHA256 + ChaCha20-Poly1305) for encrypting arbitrary data using NOSTR npub/nsec keys.
+
+**Location:** `lib/util/backup_encryption.dart`
+
+**Usage:**
+```dart
+// Encrypt data for a recipient (only their nsec can decrypt)
+final encrypted = BackupEncryption.encryptFile(plaintextBytes, recipientNpub);
+
+// Decrypt with own nsec
+final decrypted = BackupEncryption.decryptFile(encryptedBytes, myNsec);
+```
+
+**Reused by:** Backup service, Email cache (offline delivery)
+
+---
+
+## EmailRelayService Callbacks
+
+The `EmailRelayService` uses a callback pattern that decouples email routing from the transport layer (WebSocket). Station servers provide callbacks for sending to clients.
+
+**Location:** `lib/services/email_relay_service.dart`
+
+**Callback types:**
+```dart
+typedef SendToClientCallback = bool Function(String clientId, String message);
+typedef FindClientByCallsignCallback = String? Function(String callsign);
+typedef GetStationDomainCallback = String Function();
+typedef GetClientNpubCallback = String? Function(String callsign);
+```
+
+**Usage (from station server):**
+```dart
+EmailRelayService().handleEmailSend(
+  message: message,
+  senderCallsign: client.callsign!,
+  senderId: client.id,
+  sendToClient: (id, msg) => safeSocketSend(clients[id]!, msg),
+  findClientByCallsign: _findClientByCallsign,
+  getStationDomain: () => settings.sslDomain ?? settings.callsign,
+);
+```
+
+---
+
+## EmailRelayService Encrypted Cache
+
+SQLite + ECIES encrypted offline email storage. When a recipient is offline, incoming emails are encrypted with their npub and stored in a per-recipient SQLite database. Delivered and cleared when the client reconnects.
+
+**Location:** `lib/services/email_relay_service.dart` (cache methods)
+
+**Key methods:**
+- `cacheEmailForRecipient()` — Encrypt and store for offline recipient
+- `retrieveAndClearCache()` — Retrieve all cached blobs and delete the DB
+
+**Size limit:** 10 MB per recipient. Uses `BackupEncryption.encryptFile()` so only the nsec holder can decrypt.
 
 ---
 

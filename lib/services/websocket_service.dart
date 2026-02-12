@@ -372,6 +372,10 @@ class WebSocketService {
               // Incoming email from station
               LogService().log('✓ Received email from ${data['from']}');
               EmailService().receiveEmail(data);
+            } else if (data['type'] == 'email_receive_encrypted') {
+              // Encrypted cached email from station (was offline when sent)
+              LogService().log('✓ Received encrypted cached email');
+              EmailService().receiveEncryptedEmail(data);
             } else if (data['type'] == 'email_dsn') {
               // Delivery status notification
               LogService().log('✓ Received email DSN: ${data['action']} for ${data['thread_id']}');

@@ -93,6 +93,9 @@ class StorageConfig {
     return path.join(devicesDir, sanitized, 'usenet');
   }
 
+  /// Get the email cache directory path (for offline email delivery)
+  String get emailCacheDir => path.join(baseDir, 'email-cache');
+
   /// Get the file browser cache directory path
   String get fileBrowserCacheDir => path.join(baseDir, 'file_browser_cache');
 

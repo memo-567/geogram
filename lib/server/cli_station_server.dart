@@ -6,6 +6,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../services/email_relay_service.dart';
+import '../services/nip05_registry_service.dart';
 import 'station_server_base.dart';
 import 'station_settings.dart';
 import 'station_stats.dart';
@@ -410,15 +412,46 @@ class CliStationServer extends StationServerBase
   // ============ SMTP Handlers ============
 
   Future<bool> _handleIncomingEmail(String from, List<String> to, String data) async {
-    log('INFO', 'Received email from $from to ${to.join(", ")}');
-    // TODO: Deliver to local users
-    return true;
+    log('INFO', 'Received external email from $from to ${to.join(", ")}');
+    return EmailRelayService().handleIncomingEmail(
+      from: from,
+      to: to,
+      rawMessage: data,
+      sendToClient: (clientId, msg) {
+        final target = clients[clientId];
+        return target != null ? safeSocketSend(target, msg) : false;
+      },
+      findClientByCallsign: (callsign) {
+        for (final entry in clients.entries) {
+          if (entry.value.callsign?.toUpperCase() == callsign.toUpperCase()) {
+            return entry.key;
+          }
+        }
+        return null;
+      },
+      getClientNpub: (callsign) {
+        // Check connected clients first
+        for (final client in clients.values) {
+          if (client.callsign?.toUpperCase() == callsign.toUpperCase() && client.npub != null) {
+            return client.npub;
+          }
+        }
+        // Fall back to NIP-05 registry
+        final registration = Nip05RegistryService().getRegistration(callsign);
+        return registration?.npub;
+      },
+      getStationDomain: () => settings.sslDomain ?? settings.callsign.toLowerCase(),
+    );
   }
 
   bool _validateLocalRecipient(String email) {
-    // Check if recipient is a local user
-    // TODO: Check against registered users based on email local part
-    return email.isNotEmpty;
+    // Check if recipient is registered in NIP-05 registry
+    if (email.isEmpty) return false;
+    final atIndex = email.indexOf('@');
+    if (atIndex <= 0) return false;
+    final localPart = email.substring(0, atIndex).toUpperCase();
+    final registration = Nip05RegistryService().getRegistration(localPart);
+    return registration != null;
   }
 
   // ============ CLI Route Handlers ============
