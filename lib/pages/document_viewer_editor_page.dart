@@ -98,6 +98,19 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
   // Syntax highlighting state
   String? _languageId;
 
+  // Scroll controllers for syncing editor line-number gutter
+  final _editScrollController = ScrollController();
+  final _gutterScrollController = ScrollController();
+
+  void _syncGutterScroll() {
+    if (_gutterScrollController.hasClients) {
+      final max = _gutterScrollController.position.maxScrollExtent;
+      _gutterScrollController.jumpTo(
+        _editScrollController.offset.clamp(0.0, max),
+      );
+    }
+  }
+
   /// Create the appropriate controller for the current file.
   TextEditingController _createController() {
     _languageId = languageIdForFile(widget.filePath);
@@ -116,6 +129,7 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
   void initState() {
     super.initState();
     _editController = _createController();
+    _editScrollController.addListener(_syncGutterScroll);
     _loadDocument();
   }
 
@@ -151,6 +165,9 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
   void dispose() {
     _pdfDocument?.close();
     _pdfTransformController.dispose();
+    _editScrollController.removeListener(_syncGutterScroll);
+    _editScrollController.dispose();
+    _gutterScrollController.dispose();
     _editController.dispose();
     super.dispose();
   }
@@ -452,24 +469,68 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
   }
 
   Widget _buildEditor() {
+    final monoStyle = Theme.of(context).textTheme.bodyMedium?.copyWith(
+      fontFamily: 'monospace',
+      height: 1.5,
+    );
+    final gutterStyle = monoStyle?.copyWith(
+      color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+    );
+
     return Expanded(
       child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: TextField(
-          controller: _editController,
-          maxLines: null,
-          expands: true,
-          textAlignVertical: TextAlignVertical.top,
-          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-            fontFamily: 'monospace',
-            height: 1.5,
-          ),
-          decoration: const InputDecoration.collapsed(hintText: ''),
-          onChanged: (_) {
-            if (!_hasUnsavedChanges) {
-              setState(() => _hasUnsavedChanges = true);
-            }
-          },
+        padding: const EdgeInsets.only(top: 16, right: 16, bottom: 16),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Line number gutter — rebuilds only when line count changes
+            Padding(
+              padding: const EdgeInsets.only(left: 16),
+              child: ListenableBuilder(
+                listenable: _editController,
+                builder: (context, _) {
+                  final lineCount =
+                      '\n'.allMatches(_editController.text).length + 1;
+                  final digits = lineCount.toString().length;
+                  final gutterWidth = (digits < 2 ? 2 : digits) * 10.0 + 12.0;
+                  final gutterText = List.generate(
+                    lineCount, (i) => '${i + 1}',
+                  ).join('\n');
+
+                  return SizedBox(
+                    width: gutterWidth,
+                    child: SingleChildScrollView(
+                      controller: _gutterScrollController,
+                      physics: const NeverScrollableScrollPhysics(),
+                      child: Text(
+                        gutterText,
+                        style: gutterStyle,
+                        textAlign: TextAlign.right,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            // Editor
+            Expanded(
+              child: TextField(
+                controller: _editController,
+                scrollController: _editScrollController,
+                maxLines: null,
+                expands: true,
+                textAlignVertical: TextAlignVertical.top,
+                style: monoStyle,
+                decoration: const InputDecoration.collapsed(hintText: ''),
+                onChanged: (_) {
+                  if (!_hasUnsavedChanges) {
+                    setState(() => _hasUnsavedChanges = true);
+                  }
+                },
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -670,7 +731,7 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
     );
   }
 
-  /// Build text viewer with optional syntax highlighting.
+  /// Build text viewer with optional syntax highlighting and line numbers.
   Widget _buildTextViewer() {
     final appTheme = Theme.of(context);
     final content = _textContent ?? '';
@@ -679,15 +740,40 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
       height: 1.5,
     );
 
-    // No highlighting for plain text or oversized files
-    if (_languageId == null || content.length > 100 * 1024) {
+    // Line number gutter
+    final lineCount = '\n'.allMatches(content).length + 1;
+    final digits = lineCount.toString().length;
+    final gutterWidth = (digits < 2 ? 2 : digits) * 10.0 + 12.0;
+    final gutterText =
+        List.generate(lineCount, (i) => '${i + 1}').join('\n');
+    final gutterStyle = monoStyle?.copyWith(
+      color: appTheme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+    );
+
+    Widget wrapWithGutter(Widget textWidget) {
       return SingleChildScrollView(
         padding: const EdgeInsets.all(16),
-        child: SizedBox(
-          width: double.infinity,
-          child: SelectableText(content, style: monoStyle),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: gutterWidth,
+              child: Text(
+                gutterText,
+                style: gutterStyle,
+                textAlign: TextAlign.right,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(child: textWidget),
+          ],
         ),
       );
+    }
+
+    // No highlighting for plain text or oversized files
+    if (_languageId == null || content.length > 100 * 1024) {
+      return wrapWithGutter(SelectableText(content, style: monoStyle));
     }
 
     // Parse and highlight
@@ -695,13 +781,7 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
       final result = highlight.parse(content, languageId: _languageId!);
       final nodes = result.nodes;
       if (nodes == null || nodes.isEmpty) {
-        return SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: SizedBox(
-            width: double.infinity,
-            child: SelectableText(content, style: monoStyle),
-          ),
-        );
+        return wrapWithGutter(SelectableText(content, style: monoStyle));
       }
 
       final hlTheme = appTheme.brightness == Brightness.dark
@@ -715,24 +795,12 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
         color: rootStyle?.color ?? monoStyle.color,
       );
 
-      return SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: SizedBox(
-          width: double.infinity,
-          child: SelectableText.rich(
-            TextSpan(style: mergedStyle, children: spans),
-          ),
-        ),
+      return wrapWithGutter(
+        SelectableText.rich(TextSpan(style: mergedStyle, children: spans)),
       );
     } catch (_) {
       // Fallback to plain text on parse error
-      return SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: SizedBox(
-          width: double.infinity,
-          child: SelectableText(content, style: monoStyle),
-        ),
-      );
+      return wrapWithGutter(SelectableText(content, style: monoStyle));
     }
   }
 }
