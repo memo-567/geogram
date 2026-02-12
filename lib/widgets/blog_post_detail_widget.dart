@@ -337,11 +337,20 @@ class BlogPostDetailWidget extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: SelectableText(
-                    shareableUrl!,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.primary,
-                      fontFamily: 'monospace',
+                  child: GestureDetector(
+                    onTap: () => _openUrl(context, shareableUrl!),
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.click,
+                      child: Text(
+                        shareableUrl!,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.primary,
+                          fontFamily: 'monospace',
+                          decoration: TextDecoration.underline,
+                          decorationColor: theme.colorScheme.primary,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ),
                 ),
