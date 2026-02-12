@@ -75,6 +75,7 @@ import '../transfer/services/transfer_service.dart';
 import '../transfer/services/p2p_transfer_service.dart';
 import '../pages/transfer_send_page.dart';
 import '../util/event_bus.dart';
+import '../util/station_html_templates.dart';
 
 class LogApiService {
   static final LogApiService _instance = LogApiService._internal();
@@ -11805,370 +11806,53 @@ class LogApiService {
     }
   }
 
-  /// Render blog post as HTML using theme styles
-  Future<String> _renderBlogPostHtmlAsync(BlogPost post, String authorIdentifier) async {
-    // Try to load theme styles
-    String globalStyles = '';
-    String appStyles = '';
-
-    try {
-      final themeService = WebThemeService();
-      await themeService.init();
-      globalStyles = await themeService.getGlobalStyles() ?? '';
-      appStyles = await themeService.getAppStyles('blog') ?? '';
-    } catch (e) {
-      LogService().log('Could not load theme styles: $e');
-    }
-
-    return _buildBlogPostHtml(post, authorIdentifier, globalStyles, appStyles);
-  }
-
   /// Render blog post as HTML (sync wrapper for compatibility)
   String _renderBlogPostHtml(BlogPost post, String authorIdentifier, [List<String> likedHexPubkeys = const []]) {
-    // Terminimal theme styles embedded for sync rendering
-    const styles = '''
-:root {
-  --accent: rgb(255,168,106);
-  --accent-alpha-70: rgba(255,168,106,.7);
-  --accent-alpha-20: rgba(255,168,106,.2);
-  --background: #101010;
-  --color: #f0f0f0;
-  --border-color: rgba(255,240,224,.125);
-}
-@media (prefers-color-scheme: light) {
-  :root {
-    --accent: rgb(240,128,48);
-    --accent-alpha-70: rgba(240,128,48,.7);
-    --accent-alpha-20: rgba(240,128,48,.2);
-    --background: white;
-    --color: #201030;
-    --border-color: rgba(0,0,16,.125);
-  }
-  .logo { color: #fff; }
-}
-@media (prefers-color-scheme: dark) {
-  .logo { color: #000; }
-}
-html { box-sizing: border-box; }
-*, *:before, *:after { box-sizing: inherit; }
-body {
-  margin: 0; padding: 0;
-  font-family: Hack, DejaVu Sans Mono, Monaco, Consolas, Ubuntu Mono, monospace;
-  font-size: 1rem; line-height: 1.54;
-  background-color: var(--background); color: var(--color);
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-}
-h1, h2, h3 { display: flex; align-items: center; font-weight: bold; line-height: 1.3; }
-h1 { font-size: 1.4rem; }
-a { color: inherit; }
-p { margin-bottom: 20px; }
-code { font-family: inherit; background: var(--accent-alpha-20); padding: 1px 6px; margin: 0 2px; font-size: .95rem; }
-pre { padding: 20px; font-size: .95rem; overflow: auto; border-top: 1px solid rgba(255,255,255,.1); border-bottom: 1px solid rgba(255,255,255,.1); }
-pre code { padding: 0; margin: 0; background: none; }
-blockquote { border-top: 1px solid var(--accent); border-bottom: 1px solid var(--accent); margin: 40px 0; padding: 25px; }
-ul, ol { margin-left: 30px; padding: 0; }
-.container { display: flex; flex-direction: column; padding: 40px; max-width: 864px; min-height: 100vh; margin: 0 auto; }
-@media (max-width: 683px) { .container { padding: 20px; } }
-.header { display: flex; flex-direction: column; position: relative; }
-.header__inner { display: flex; align-items: center; justify-content: space-between; }
-.header__logo { display: flex; flex: 1; }
-.header__logo:after { content: ""; background: repeating-linear-gradient(90deg, var(--accent), var(--accent) 2px, transparent 0, transparent 16px); display: block; width: 100%; right: 10px; }
-.header__logo a { flex: 0 0 auto; max-width: 100%; text-decoration: none; }
-.logo { display: flex; align-items: center; text-decoration: none; background: var(--accent); color: #000; padding: 5px 10px; }
-.menu { margin: 20px 0; }
-.menu__inner { display: flex; flex-wrap: wrap; list-style: none; margin: 0; padding: 0; }
-.menu__inner li.active { color: var(--accent-alpha-70); }
-.menu__inner li:not(:last-of-type) { margin-right: 20px; margin-bottom: 10px; flex: 0 0 auto; }
-.menu__inner a { color: inherit; text-decoration: none; }
-.menu__inner a:hover { color: var(--accent); }
-.content { display: flex; }
-.post { width: 100%; text-align: left; margin: 20px auto; padding: 20px 0; }
-.post-meta, .post-meta-inline { font-size: 1rem; margin-bottom: 10px; color: var(--accent-alpha-70); }
-.post-meta-inline { display: inline; }
-.post-title { --border: 2px dashed var(--accent); position: relative; color: var(--accent); margin: 0 0 15px; padding-bottom: 15px; border-bottom: var(--border); font-weight: normal; }
-.post-title a { text-decoration: none; color: inherit; }
-.post-tags, .post-tags-inline { margin-bottom: 20px; font-size: 1rem; opacity: .5; }
-.post-tag { text-decoration: underline; color: inherit; }
-.post-content { margin-top: 30px; }
-.post ul { list-style: none; }
-.post ul li { position: relative; }
-.post ul li:before { content: ">"; position: absolute; left: -20px; color: var(--accent); }
-.pagination { margin-top: 50px; }
-.pagination__buttons { display: flex; align-items: center; justify-content: center; }
-.button { position: relative; display: inline-flex; align-items: center; justify-content: center; font-size: 1rem; border-radius: 8px; max-width: 40%; padding: 0; cursor: pointer; appearance: none; background: none; border: 1px solid var(--accent); color: var(--color); }
-.button a { display: flex; padding: 8px 16px; text-decoration: none; color: inherit; }
-.button:hover { background: var(--accent-alpha-20); }
-.footer { padding: 40px 0; flex-grow: 0; opacity: .5; }
-.footer__inner { display: flex; align-items: center; justify-content: space-between; margin: 0; max-width: 100%; }
-.copyright { display: flex; flex-direction: row; align-items: center; font-size: 1rem; }
-.comments-section { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border-color); }
-.comment { padding: 15px 0; border-bottom: 1px solid var(--border-color); }
-.comment-meta { font-size: 0.9rem; color: var(--accent-alpha-70); margin-bottom: 10px; }
-.comment-author { font-weight: bold; margin-right: 10px; }
-.feedback-section { margin-top: 30px; padding: 20px 0; border-top: 1px solid var(--border-color); display: flex; align-items: center; gap: 30px; }
-.like-button { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 16px; background: none; border: 1px solid var(--accent); color: var(--color); font-family: inherit; font-size: 1rem; cursor: pointer; border-radius: 8px; transition: background-color 0.2s ease; }
-.like-button:hover { background: var(--accent-alpha-20); }
-.like-button.liked { background: var(--accent); color: #000; }
-.like-button:disabled { opacity: 0.5; cursor: not-allowed; }
-.like-count { color: var(--accent-alpha-70); font-size: 0.95rem; }
-.nostr-notice { font-size: 0.85rem; color: var(--accent-alpha-70); }
-.nostr-notice a { color: var(--accent); }
-''';
+    // Pre-render plain text content to HTML paragraphs
+    final htmlContent = post.content.split('\n\n')
+      .where((p) => p.trim().isNotEmpty)
+      .map((p) => '<p>${escapeHtml(p.trim())}</p>')
+      .join('\n');
 
-    return _buildBlogPostHtml(post, authorIdentifier, styles, '', likedHexPubkeys);
-  }
-
-  /// Build blog post HTML with Terminimal theme structure
-  String _buildBlogPostHtml(BlogPost post, String authorIdentifier, String globalStyles, String appStyles, [List<String> likedHexPubkeys = const []]) {
-    final buffer = StringBuffer();
-
-    buffer.writeln('<!DOCTYPE html>');
-    buffer.writeln('<html lang="en">');
-    buffer.writeln('<head>');
-    buffer.writeln('  <meta charset="UTF-8">');
-    buffer.writeln('  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">');
-    buffer.writeln('  <title>${escapeHtml(post.title)} - ${escapeHtml(authorIdentifier)}</title>');
-    buffer.writeln('  <style>$globalStyles</style>');
-    buffer.writeln('  <style>$appStyles</style>');
-    buffer.writeln('</head>');
-    buffer.writeln('<body>');
-    buffer.writeln('<div class="container">');
-
-    // Header with logo and menu
-    buffer.writeln('  <header class="header">');
-    buffer.writeln('    <div class="header__inner">');
-    buffer.writeln('      <div class="header__logo">');
-    buffer.writeln('        <a href="../" style="text-decoration: none;">');
-    buffer.writeln('          <div class="logo">${escapeHtml(authorIdentifier)}</div>');
-    buffer.writeln('        </a>');
-    buffer.writeln('      </div>');
-    buffer.writeln('    </div>');
-    buffer.writeln('    <nav class="menu">');
-    buffer.writeln('      <ul class="menu__inner">');
-    buffer.writeln('        <li><a href="../">home</a></li>');
-    buffer.writeln('        <li class="active"><a href="./">blog</a></li>');
-    buffer.writeln('        <li><a href="../chat/">chat</a></li>');
-    buffer.writeln('      </ul>');
-    buffer.writeln('    </nav>');
-    buffer.writeln('  </header>');
-
-    // Content
-    buffer.writeln('  <div class="content">');
-    buffer.writeln('    <div class="post">');
-
-    // Post title
-    buffer.writeln('      <h1 class="post-title"><a href="#">${escapeHtml(post.title)}</a></h1>');
-
-    // Meta
-    buffer.writeln('      <div class="post-meta-inline">');
-    buffer.writeln('        <span class="post-date">${post.displayDate}</span>');
-    buffer.writeln('      </div>');
-
-    // Tags
-    if (post.tags.isNotEmpty) {
-      buffer.writeln('      <span class="post-tags-inline">');
-      buffer.writeln('        :: tags:&nbsp;');
-      for (final tag in post.tags) {
-        buffer.writeln('        <a class="post-tag" href="#">#${escapeHtml(tag)}</a>&nbsp;');
-      }
-      buffer.writeln('      </span>');
-    }
-
-    // Content
-    buffer.writeln('      <div class="post-content">');
-    final paragraphs = post.content.split('\n\n');
-    for (final para in paragraphs) {
-      if (para.trim().isNotEmpty) {
-        buffer.writeln('        <p>${escapeHtml(para.trim())}</p>');
-      }
-    }
-    buffer.writeln('      </div>');
-
-    // Comments
+    // Build comments HTML
+    String commentsHtml = '';
     if (post.comments.isNotEmpty) {
-      buffer.writeln('      <div class="comments-section">');
-      buffer.writeln('        <h2>Comments (${post.comments.length})</h2>');
-      for (final comment in post.comments) {
-        buffer.writeln('        <div class="comment">');
-        buffer.writeln('          <div class="comment-meta">');
-        buffer.writeln('            <span class="comment-author">${escapeHtml(comment.author)}</span>');
-        buffer.writeln('            <span class="comment-date">${comment.displayDate}</span>');
-        buffer.writeln('          </div>');
-        buffer.writeln('          <p>${escapeHtml(comment.content)}</p>');
-        buffer.writeln('        </div>');
-      }
-      buffer.writeln('      </div>');
+      final commentCards = post.comments.map((comment) => '''
+        <div class="comment">
+          <div class="comment-meta">
+            <span class="comment-author">${escapeHtml(comment.author)}</span>
+            <span class="comment-date">${comment.displayDate}</span>
+          </div>
+          <p>${escapeHtml(comment.content)}</p>
+        </div>''').join('\n');
+      commentsHtml = '''
+      <div class="comments-section">
+        <h2>Comments (${post.comments.length})</h2>
+        $commentCards
+      </div>''';
     }
 
-    // Feedback section (NOSTR likes)
-    buffer.writeln('      <div class="feedback-section" id="feedback-section" style="display: none;">');
-    buffer.writeln('        <button class="like-button" id="like-button" onclick="toggleLike()">');
-    buffer.writeln('          <span id="like-icon">♡</span>');
-    buffer.writeln('          <span>Like</span>');
-    buffer.writeln('        </button>');
-    buffer.writeln('        <span class="like-count" id="like-count">${post.likesCount > 0 ? "${post.likesCount} like${post.likesCount != 1 ? "s" : ""}" : ""}</span>');
-    buffer.writeln('      </div>');
-    buffer.writeln('      <div class="nostr-notice" id="nostr-notice" style="display: none;">');
-    buffer.writeln('        <a href="https://getalby.com" target="_blank">Install a NOSTR extension</a> to like this post');
-    buffer.writeln('      </div>');
-
-    // Back button
-    buffer.writeln('      <div class="pagination">');
-    buffer.writeln('        <div class="pagination__buttons">');
-    buffer.writeln('          <span class="button">');
-    buffer.writeln('            <a href="./">← Back to blog</a>');
-    buffer.writeln('          </span>');
-    buffer.writeln('        </div>');
-    buffer.writeln('      </div>');
-
-    buffer.writeln('    </div>');
-    buffer.writeln('  </div>');
-
-    // Footer
-    buffer.writeln('  <footer class="footer">');
-    buffer.writeln('    <div class="footer__inner">');
-    buffer.writeln('      <div class="copyright">');
-    buffer.writeln('        <span>published via geogram</span>');
-    buffer.writeln('      </div>');
-    buffer.writeln('    </div>');
-    buffer.writeln('  </footer>');
-
-    buffer.writeln('</div>');
-
-    // NOSTR likes JavaScript
-    final postId = escapeHtml(post.id);
-    final authorNpub = escapeHtml(post.npub ?? '');
-    buffer.writeln('''
-<script>
-(function() {
-  const postId = '$postId';
-  const authorNpub = '$authorNpub';
-  const apiBase = '../api/blog';
-  const likedPubkeys = ${toJsonArray(likedHexPubkeys)};
-  let userPubkey = null;
-  let isLiked = false;
-
-  function onNostrAvailable() {
-    document.getElementById('feedback-section').style.display = 'flex';
-    window.nostr.getPublicKey().then(function(pk) {
-      userPubkey = pk;
-      // Check if user already liked this post
-      if (likedPubkeys.includes(pk)) {
-        isLiked = true;
-        updateUI(${post.likesCount});
-      }
-    }).catch(function(e) {
-      console.log('User denied public key access');
-    });
+    return StationHtmlTemplates.buildBlogPostPage(
+      postTitle: post.title,
+      postDate: post.displayDate,
+      author: authorIdentifier,
+      htmlContent: htmlContent,
+      tags: post.tags,
+      menuItems: '<li><a href="../">home</a></li><li class="active"><a href="./">blog</a></li><li><a href="../chat/">chat</a></li>',
+      logoText: authorIdentifier,
+      logoHref: '../',
+      postId: post.id,
+      npub: post.npub,
+      likesCount: post.likesCount,
+      likedHexPubkeys: likedHexPubkeys,
+      commentsHtml: commentsHtml,
+      globalStyles: StationHtmlTemplates.getBaseStyles(),
+      appStyles: '',
+      backUrl: './',
+      backLabel: '\u2190 Back to blog',
+    );
   }
 
-  function init() {
-    // If already available, use it immediately
-    if (typeof window.nostr !== 'undefined') {
-      onNostrAvailable();
-      return;
-    }
-
-    // Watch for when extension injects window.nostr
-    var _nostr;
-    Object.defineProperty(window, 'nostr', {
-      configurable: true,
-      enumerable: true,
-      get: function() { return _nostr; },
-      set: function(value) {
-        _nostr = value;
-        // Restore normal property behavior
-        Object.defineProperty(window, 'nostr', {
-          value: _nostr,
-          writable: true,
-          configurable: true,
-          enumerable: true
-        });
-        onNostrAvailable();
-      }
-    });
-
-    // Fallback: show notice after 3 seconds if no extension
-    setTimeout(function() {
-      if (typeof window.nostr === 'undefined') {
-        document.getElementById('nostr-notice').style.display = 'block';
-      }
-    }, 3000);
-  }
-
-  window.toggleLike = async function() {
-    if (!userPubkey) {
-      try {
-        userPubkey = await window.nostr.getPublicKey();
-      } catch (e) {
-        alert('Please allow access to your NOSTR public key');
-        return;
-      }
-    }
-
-    const button = document.getElementById('like-button');
-    button.disabled = true;
-
-    try {
-      const unsignedEvent = {
-        pubkey: userPubkey,
-        created_at: Math.floor(Date.now() / 1000),
-        kind: 7,
-        tags: [
-          ['p', authorNpub],
-          ['e', postId],
-          ['type', 'likes']
-        ],
-        content: 'like'
-      };
-
-      const signedEvent = await window.nostr.signEvent(unsignedEvent);
-
-      if (!signedEvent || !signedEvent.sig) {
-        throw new Error('Signing cancelled or failed');
-      }
-
-      const response = await fetch(apiBase + '/' + encodeURIComponent(postId) + '/like', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(signedEvent)
-      });
-
-      const result = await response.json();
-      if (result.success) {
-        isLiked = result.liked;
-        updateUI(result.like_count);
-      } else if (result.error) {
-        console.error('API error:', result.error);
-      }
-    } catch (e) {
-      console.error('Error toggling like:', e);
-    } finally {
-      button.disabled = false;
-    }
-  };
-
-  function updateUI(count) {
-    const button = document.getElementById('like-button');
-    const icon = document.getElementById('like-icon');
-    const countEl = document.getElementById('like-count');
-
-    button.classList.toggle('liked', isLiked);
-    icon.textContent = isLiked ? '♥' : '♡';
-    countEl.textContent = count > 0 ? count + ' like' + (count !== 1 ? 's' : '') : '';
-  }
-
-  document.addEventListener('DOMContentLoaded', init);
-})();
-</script>
-''');
-
-    buffer.writeln('</body>');
-    buffer.writeln('</html>');
-
-    return buffer.toString();
-  }
 
 
   // ============ Wallet API Handlers ============

@@ -24,6 +24,7 @@ import '../services/storage_config.dart';
 import '../services/webrtc_config.dart';
 import '../services/profile_storage.dart';
 import '../util/html_utils.dart';
+import '../util/station_html_templates.dart';
 import '../util/nostr_event.dart';
 import '../util/tlsh.dart';
 import '../util/event_bus.dart';
@@ -1098,259 +1099,20 @@ class WebSocketService {
 
   /// Build HTML page for blog post
   String _buildBlogHtmlPage(BlogPost post, String htmlContent, String author, [List<String> likedHexPubkeys = const []]) {
-    final tagsHtml = post.tags.isNotEmpty
-        ? '<div class="tags">${post.tags.map((t) => '<span class="tag">#$t</span>').join(' ')}</div>'
-        : '';
-
-    return '''<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${escapeHtml(post.title)} - $author</title>
-  <style>
-    * { box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-      line-height: 1.6;
-      max-width: 800px;
-      margin: 0 auto;
-      padding: 20px;
-      background: #fafafa;
-      color: #333;
-    }
-    article {
-      background: white;
-      padding: 40px;
-      border-radius: 8px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    }
-    h1 { margin-top: 0; color: #1a1a1a; }
-    .meta {
-      color: #666;
-      font-size: 14px;
-      margin-bottom: 20px;
-      padding-bottom: 20px;
-      border-bottom: 1px solid #eee;
-    }
-    .tags { margin-top: 10px; }
-    .tag {
-      display: inline-block;
-      background: #e0f0ff;
-      color: #0066cc;
-      padding: 2px 8px;
-      border-radius: 4px;
-      font-size: 12px;
-      margin-right: 5px;
-    }
-    img { max-width: 100%; height: auto; }
-    code {
-      background: #f4f4f4;
-      padding: 2px 6px;
-      border-radius: 3px;
-      font-family: 'SF Mono', Monaco, monospace;
-    }
-    pre {
-      background: #2d2d2d;
-      color: #f8f8f2;
-      padding: 16px;
-      border-radius: 6px;
-      overflow-x: auto;
-    }
-    pre code { background: none; padding: 0; color: inherit; }
-    blockquote {
-      border-left: 4px solid #0066cc;
-      margin: 20px 0;
-      padding-left: 20px;
-      color: #555;
-    }
-    a { color: #0066cc; }
-    footer {
-      margin-top: 40px;
-      padding-top: 20px;
-      border-top: 1px solid #eee;
-      text-align: center;
-      font-size: 12px;
-      color: #999;
-    }
-    .feedback-section {
-      margin-top: 30px;
-      padding: 20px 0;
-      border-top: 1px solid #eee;
-      display: flex;
-      align-items: center;
-      gap: 30px;
-    }
-    .like-button {
-      position: relative;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      padding: 8px 16px;
-      background: none;
-      border: 1px solid #0066cc;
-      color: #333;
-      font-family: inherit;
-      font-size: 1rem;
-      cursor: pointer;
-      border-radius: 8px;
-      transition: background-color 0.2s ease;
-    }
-    .like-button:hover { background: #e0f0ff; }
-    .like-button.liked { background: #0066cc; color: #fff; }
-    .like-button:disabled { opacity: 0.5; cursor: not-allowed; }
-    .like-count { color: #666; font-size: 0.95rem; }
-    .nostr-notice { font-size: 0.85rem; color: #666; }
-    .nostr-notice a { color: #0066cc; }
-  </style>
-</head>
-<body>
-  <article>
-    <h1>${escapeHtml(post.title)}</h1>
-    <div class="meta">
-      <span>By <strong>$author</strong></span>
-      <span> · </span>
-      <span>${post.displayDate}</span>
-      $tagsHtml
-    </div>
-    <div class="content">
-      $htmlContent
-    </div>
-    <div class="feedback-section" id="feedback-section" style="display: none;">
-      <button class="like-button" id="like-button" onclick="toggleLike()">
-        <span id="like-icon">♡</span>
-        <span>Like</span>
-      </button>
-      <span class="like-count" id="like-count">${post.likesCount > 0 ? "${post.likesCount} like${post.likesCount != 1 ? "s" : ""}" : ""}</span>
-    </div>
-    <div class="nostr-notice" id="nostr-notice" style="display: none;">
-      <a href="https://getalby.com" target="_blank">Install a NOSTR extension</a> to like this post
-    </div>
-  </article>
-  <footer>
-    Powered by <a href="https://geogram.radio">geogram</a>
-  </footer>
-<script>
-(function() {
-  const postId = '${escapeHtml(post.id)}';
-  const authorNpub = '${escapeHtml(post.npub ?? '')}';
-  const apiBase = '../api/blog';
-  const likedPubkeys = ${toJsonArray(likedHexPubkeys)};
-  let userPubkey = null;
-  let isLiked = false;
-
-  function onNostrAvailable() {
-    document.getElementById('feedback-section').style.display = 'flex';
-    window.nostr.getPublicKey().then(function(pk) {
-      userPubkey = pk;
-      // Check if user already liked this post
-      if (likedPubkeys.includes(pk)) {
-        isLiked = true;
-        updateUI(${post.likesCount});
-      }
-    }).catch(function(e) {
-      console.log('User denied public key access');
-    });
-  }
-
-  function init() {
-    if (typeof window.nostr !== 'undefined') {
-      onNostrAvailable();
-      return;
-    }
-
-    var _nostr;
-    Object.defineProperty(window, 'nostr', {
-      configurable: true,
-      enumerable: true,
-      get: function() { return _nostr; },
-      set: function(value) {
-        _nostr = value;
-        Object.defineProperty(window, 'nostr', {
-          value: _nostr,
-          writable: true,
-          configurable: true,
-          enumerable: true
-        });
-        onNostrAvailable();
-      }
-    });
-
-    setTimeout(function() {
-      if (typeof window.nostr === 'undefined') {
-        document.getElementById('nostr-notice').style.display = 'block';
-      }
-    }, 3000);
-  }
-
-  window.toggleLike = async function() {
-    if (!userPubkey) {
-      try {
-        userPubkey = await window.nostr.getPublicKey();
-      } catch (e) {
-        alert('Please allow access to your NOSTR public key');
-        return;
-      }
-    }
-
-    const button = document.getElementById('like-button');
-    button.disabled = true;
-
-    try {
-      const unsignedEvent = {
-        pubkey: userPubkey,
-        created_at: Math.floor(Date.now() / 1000),
-        kind: 7,
-        tags: [
-          ['p', authorNpub],
-          ['e', postId],
-          ['type', 'likes']
-        ],
-        content: 'like'
-      };
-
-      const signedEvent = await window.nostr.signEvent(unsignedEvent);
-
-      if (!signedEvent || !signedEvent.sig) {
-        throw new Error('Signing cancelled or failed');
-      }
-
-      const response = await fetch(apiBase + '/' + encodeURIComponent(postId) + '/like', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(signedEvent)
-      });
-
-      const result = await response.json();
-      if (result.success) {
-        isLiked = result.liked;
-        updateUI(result.like_count);
-      } else if (result.error) {
-        console.error('API error:', result.error);
-      }
-    } catch (e) {
-      console.error('Error toggling like:', e);
-    } finally {
-      button.disabled = false;
-    }
-  };
-
-  function updateUI(count) {
-    const button = document.getElementById('like-button');
-    const icon = document.getElementById('like-icon');
-    const countEl = document.getElementById('like-count');
-
-    button.classList.toggle('liked', isLiked);
-    icon.textContent = isLiked ? '♥' : '♡';
-    countEl.textContent = count > 0 ? count + ' like' + (count !== 1 ? 's' : '') : '';
-  }
-
-  document.addEventListener('DOMContentLoaded', init);
-})();
-</script>
-</body>
-</html>''';
+    return StationHtmlTemplates.buildBlogPostPage(
+      postTitle: post.title,
+      postDate: post.displayDate,
+      author: author,
+      htmlContent: htmlContent,
+      description: post.description,
+      tags: post.tags,
+      postId: post.id,
+      npub: post.npub,
+      likesCount: post.likesCount,
+      likedHexPubkeys: likedHexPubkeys,
+      globalStyles: StationHtmlTemplates.getBaseStyles(),
+      appStyles: '',
+    );
   }
 
 
