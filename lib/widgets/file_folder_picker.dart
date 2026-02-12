@@ -1002,11 +1002,108 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     );
   }
 
+  /// Show a dialog to create a new folder in the current directory.
+  Future<void> _createNewFolder() async {
+    final controller = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('New folder'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Folder name',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (value) => Navigator.pop(context, value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+
+    if (name == null || name.trim().isEmpty) return;
+    final trimmed = name.trim();
+
+    // Validate name
+    if (trimmed.contains('/') || trimmed.contains('\\')) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Folder name cannot contain / or \\')),
+        );
+      }
+      return;
+    }
+    if (trimmed == '.' || trimmed == '..') {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Invalid folder name')),
+        );
+      }
+      return;
+    }
+
+    try {
+      if (_isInsideProfileStorage()) {
+        final storage = widget.profileStorage!;
+        final basePath = storage.basePath;
+        final parentRelative = _currentDirectory.path == basePath
+            ? ''
+            : p.relative(_currentDirectory.path, from: basePath);
+        final newDirRelative = parentRelative.isEmpty
+            ? trimmed
+            : '$parentRelative/$trimmed';
+
+        if (await storage.directoryExists(newDirRelative)) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Folder already exists')),
+            );
+          }
+          return;
+        }
+        await storage.createDirectory(newDirRelative);
+      } else {
+        final newDir = Directory(p.join(_currentDirectory.path, trimmed));
+        if (await newDir.exists()) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Folder already exists')),
+            );
+          }
+          return;
+        }
+        await newDir.create();
+      }
+      _loadDirectory();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to create folder: $e')),
+        );
+      }
+    }
+  }
+
   /// Returns the action widgets (view toggle, hidden files, sort) so a parent
   /// AppBar can include them directly. Used in explorer mode.
   List<Widget> buildActions() {
     final colorScheme = Theme.of(context).colorScheme;
     return [
+      IconButton(
+        icon: const Icon(Icons.create_new_folder_outlined),
+        tooltip: 'New folder',
+        onPressed: _isVirtualFolder ? null : _createNewFolder,
+      ),
       IconButton(
         icon: Icon(_isGridView ? Icons.view_list_rounded : Icons.grid_view_rounded),
         tooltip: _isGridView ? 'List view' : 'Grid view',

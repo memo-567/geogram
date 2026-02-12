@@ -316,6 +316,7 @@ A professional file and folder picker widget with rich features.
 - ProfileStorage-aware: files dropped into encrypted storage use `ProfileStorage.copyFromExternal()`
 - Conflict resolution with " (copy)" / " (copy N)" suffix naming
 - Recursive directory import support
+- Create new folders from the toolbar (with validation and duplicate detection)
 - Works on Linux, Windows, and Android
 
 **Usage:**
