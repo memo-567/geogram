@@ -75,6 +75,7 @@ Terminal=false
 StartupWMClass=$APP_ID
 EOF
 
+chmod +x "$APP_DIR/${APP_ID}.desktop"
 echo "Desktop entry installed: $APP_DIR/${APP_ID}.desktop"
 
 # ---------------------------------------------------------------------------
@@ -91,6 +92,7 @@ X-GNOME-Autostart-enabled=true
 StartupWMClass=$APP_ID
 EOF
 
+chmod +x "$AUTOSTART_DIR/${APP_ID}.desktop"
 echo "Autostart enabled: $AUTOSTART_DIR/${APP_ID}.desktop"
 
 # ---------------------------------------------------------------------------

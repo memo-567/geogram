@@ -29,11 +29,10 @@ trap 'rm -rf "$TMP"' EXIT
 echo "Downloading $ASSET..."
 curl -fSL --progress-bar -o "$TMP/$ASSET" "$RELEASE_URL"
 
-# ---- Extract ---------------------------------------------------------------
+# ---- Extract (overwrites bundle files, preserves user data) ---------------
 echo "Installing to $INSTALL_DIR..."
-rm -rf "$INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
-tar -xzf "$TMP/$ASSET" -C "$INSTALL_DIR" --strip-components=1
+tar -xzf "$TMP/$ASSET" -C "$INSTALL_DIR" --strip-components=1 --overwrite
 
 # ---- Desktop integration ---------------------------------------------------
 if [ -x "$INSTALL_DIR/install-desktop.sh" ]; then
