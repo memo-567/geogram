@@ -107,6 +107,7 @@ import 'music/pages/music_home_page.dart';
 import 'pages/files_browser_page.dart';
 import 'stories/pages/stories_home_page.dart';
 import 'pages/qr_browser_page.dart';
+import 'pages/website_browser_page.dart';
 import 'pages/profile_management_page.dart';
 import 'pages/create_app_page.dart';
 import 'pages/onboarding_page.dart';
@@ -2636,6 +2637,15 @@ class _AppsPageState extends State<AppsPage> {
                                                 appTitle:
                                                     appEntry.title,
                                               )
+                                            : appEntry.type == 'www'
+                                            ? WebsiteBrowserPage(
+                                                appPath:
+                                                    appEntry.storagePath ??
+                                                        '',
+                                                appTitle:
+                                                    appEntry.title,
+                                                i18n: _i18n,
+                                              )
                                             : AppBrowserPage(
                                                 app: appEntry,
                                               );
@@ -2890,6 +2900,15 @@ class _AppsPageState extends State<AppsPage> {
                                                         '',
                                                 appTitle:
                                                     appEntry.title,
+                                              )
+                                            : appEntry.type == 'www'
+                                            ? WebsiteBrowserPage(
+                                                appPath:
+                                                    appEntry.storagePath ??
+                                                        '',
+                                                appTitle:
+                                                    appEntry.title,
+                                                i18n: _i18n,
                                               )
                                             : AppBrowserPage(
                                                 app: appEntry,
