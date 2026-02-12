@@ -1120,6 +1120,40 @@ $nostrScript
 .marker-cluster-medium div { background: var(--accent); }
 .marker-cluster-large { background: rgba(255,168,106,0.6); }
 .marker-cluster-large div { background: var(--accent); }
+
+/* Header Navigation - Combined breadcrumb style */
+.header-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 1.1rem;
+  padding: 10px 0;
+}
+.header-nav .nav-name {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: bold;
+}
+.header-nav .nav-name:hover {
+  text-decoration: underline;
+}
+.header-nav .nav-separator {
+  color: var(--accent-alpha-70);
+  margin: 0 2px;
+}
+.header-nav .nav-pipe {
+  color: var(--accent-alpha-70);
+}
+.header-nav .nav-item {
+  color: var(--color);
+  text-decoration: none;
+}
+.header-nav .nav-item:hover {
+  color: var(--accent);
+}
+.header-nav .nav-item.active {
+  color: var(--accent-alpha-70);
+}
 ''';
   }
 
@@ -1298,7 +1332,6 @@ $nostrScript
     required bool hasDevicesWithLocation,
     String globalStyles = '',
     String stationStyles = '',
-    String navCss = '',
   }) {
     final mapDisplay = hasDevicesWithLocation ? 'block' : 'none';
     final devicesDisplay = clientCount > 0 ? 'grid' : 'none';
@@ -1321,7 +1354,6 @@ $nostrScript
   <style>
 $globalStyles
 $stationStyles
-$navCss
 $extraStyles
   </style>
 </head>

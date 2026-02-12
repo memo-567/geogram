@@ -327,6 +327,12 @@ class AppService {
 
       contentBuffer.writeln('</div>');
 
+      // Generate dynamic menu items
+      final menuItems = WebNavigation.generateDeviceMenuItems(
+        activeApp: 'home',
+        hasBlog: recentPosts.isNotEmpty,
+      );
+
       // Process template with dynamic content
       final html = themeService.processTemplate(template, {
         'TITLE': displayName,
@@ -334,6 +340,7 @@ class AppService {
         'APP_NAME': displayName,
         'APP_DESCRIPTION': description,
         'CONTENT': contentBuffer.toString(),
+        'MENU_ITEMS': menuItems,
         'DATA_JSON': '{"files": []}',
         'SCRIPTS': '',
         'GENERATED_DATE': DateTime.now().toIso8601String(),
@@ -586,12 +593,19 @@ class AppService {
         }
       }
 
+      // Generate dynamic menu items
+      final menuItems = WebNavigation.generateDeviceMenuItems(
+        activeApp: 'blog',
+        hasBlog: true,
+      );
+
       // Process template
       final html = themeService.processTemplate(template, {
         'TITLE': _currentCallsign ?? 'Blog',
         'APP_NAME': _currentCallsign ?? 'Blog',
         'APP_DESCRIPTION': '${publishedPosts.length} post${publishedPosts.length != 1 ? 's' : ''}',
         'CONTENT': postsHtml.toString(),
+        'MENU_ITEMS': menuItems,
         'DATA_JSON': jsonEncode({'posts': publishedPosts}),
       });
 

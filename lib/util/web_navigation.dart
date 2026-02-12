@@ -137,42 +137,4 @@ class WebNavigation {
     'download': NavItem(id: 'download', label: 'download', path: '/download/'),
   };
 
-  /// Get the CSS for header navigation
-  /// This can be included inline or in theme files
-  static String getHeaderNavCss() {
-    return '''
-/* Header Navigation - Combined breadcrumb style */
-.header-nav {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  font-size: 1.1rem;
-  padding: 10px 0;
-}
-.header-nav .nav-name {
-  color: var(--accent);
-  text-decoration: none;
-  font-weight: bold;
-}
-.header-nav .nav-name:hover {
-  text-decoration: underline;
-}
-.header-nav .nav-separator {
-  color: var(--accent-alpha-70);
-  margin: 0 2px;
-}
-.header-nav .nav-pipe {
-  color: var(--accent-alpha-70);
-}
-.header-nav .nav-item {
-  color: var(--color);
-  text-decoration: none;
-}
-.header-nav .nav-item:hover {
-  color: var(--accent);
-}
-.header-nav .nav-item.active {
-  color: var(--accent-alpha-70);
-}''';
-  }
 }

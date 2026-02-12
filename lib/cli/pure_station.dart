@@ -7544,7 +7544,6 @@ class PureStationServer {
       hasDevicesWithLocation: devicesWithLocation.isNotEmpty,
       globalStyles: StationHtmlTemplates.getBaseStyles(),
       stationStyles: '',
-      navCss: WebNavigation.getHeaderNavCss(),
     );
 
     await _sendCompressedResponse(

@@ -2552,123 +2552,50 @@ final thumbnailPath = await VideoMetadataExtractor.generateThumbnail(
 
 **File:** `lib/util/web_navigation.dart`
 
-Generates combined breadcrumb-style navigation headers for web pages. This is a shared pure Dart library (no Flutter dependencies) that creates consistent navigation across:
-- Station server pages (`pure_station.dart`) - CLI mode
-- Remote device pages (`collection_service.dart`) - Flutter apps
+Generates `<li>` menu items for web page navigation. Pure Dart library (no Flutter deps) used across station and device pages.
 
-**Format:** `stationName > home | chat | blog`
-
-**Purpose:**
-Navigation should only show links to apps that actually exist. For example, a station may have "home" and "chat" but no "blog", while a device might have "home", "blog", "chat", and "events".
-
-**Classes:**
-
-```dart
-class NavItem {
-  final String id;
-  final String label;
-  final String path;
-}
-
-class WebNavigation {
-  static String generateCombinedHeader({...});
-  static String generateStationHeader({...});
-  static String generateDeviceHeader({...});
-}
-```
+**Format:** `station > home | chat | blog` (station pages) or `home | chat | blog` (device pages)
 
 **Methods:**
 
-**generateStationHeader** - For station server pages (absolute paths like `/chat/`)
+**generateStationMenuItems** - For station server pages (absolute paths like `/chat/`, prefixed with "station >")
 ```dart
-static String generateStationHeader({
-  required String name,
+static String generateStationMenuItems({
   required String activeApp,
-  bool hasBlog = false,
-  bool hasChat = true,
-  bool hasEvents = false,
-  bool hasPlaces = false,
-  bool hasFiles = false,
-  bool hasAlerts = false,
+  bool hasBlog = false, bool hasChat = true, bool hasEvents = false,
+  bool hasPlaces = false, bool hasFiles = false, bool hasAlerts = false,
   bool hasDownload = false,
 })
 ```
 
-**generateDeviceHeader** - For device/collection pages (relative paths like `../chat/`)
+**generateDeviceMenuItems** - For device/collection pages (relative paths like `../chat/`)
 ```dart
-static String generateDeviceHeader({
-  required String name,
+static String generateDeviceMenuItems({
   required String activeApp,
-  bool hasBlog = false,
-  bool hasChat = true,
-  bool hasEvents = false,
-  bool hasPlaces = false,
-  bool hasFiles = false,
-  bool hasAlerts = false,
+  bool hasBlog = false, bool hasChat = true, bool hasEvents = false,
+  bool hasPlaces = false, bool hasFiles = false, bool hasAlerts = false,
   bool hasDownload = false,
 })
 ```
 
-**Usage in Station Server (CLI mode):**
-```dart
-import '../util/web_navigation.dart';
-
-final headerNav = WebNavigation.generateStationHeader(
-  name: stationName,
-  activeApp: 'chat',
-  hasChat: true,
-  hasBlog: false,  // Station doesn't have blog
-);
-
-// Pass to template
-final variables = {
-  'HEADER_NAV': headerNav,
-  // ... other variables
-};
+**Usage in Templates:**
+Templates use `{{MENU_ITEMS}}` placeholder inside `<ul class="menu__inner">`:
+```html
+<nav class="menu">
+  <ul class="menu__inner">
+    {{MENU_ITEMS}}
+  </ul>
+</nav>
 ```
 
-**Usage in Collection Service (Flutter apps):**
+**Usage in Generators:**
 ```dart
-import '../util/web_navigation.dart';
-
-// Check which apps exist
-final hasBlog = await Directory('$collectionPath/blog').exists();
-final hasEvents = await Directory('$collectionPath/events').exists();
-
-final headerNav = WebNavigation.generateDeviceHeader(
-  name: callsign,
-  activeApp: 'chat',
-  hasChat: true,
-  hasBlog: hasBlog,
-  hasEvents: hasEvents,
+final menuItems = WebNavigation.generateDeviceMenuItems(
+  activeApp: 'blog', hasBlog: true,
 );
-
-// Pass to template
 final html = themeService.processTemplate(template, {
-  'HEADER_NAV': headerNav,
-  // ... other variables
+  'MENU_ITEMS': menuItems,
 });
-```
-
-**Template Integration:**
-Templates should use `{{HEADER_NAV}}` placeholder:
-```html
-<header class="header">
-  <div class="header__inner">
-    <nav class="header-nav">
-      {{HEADER_NAV}}
-    </nav>
-  </div>
-</header>
-```
-
-**Output Example:**
-```html
-<a href="/" class="nav-name">p2p.radio</a>
-<span class="nav-separator"> > </span>
-<a href="/" class="nav-item">home</a>
-<span class="nav-pipe"> | </span>
-<span class="nav-item active">chat</span>
 ```
 
 **Supported Apps:**
@@ -2685,19 +2612,59 @@ Templates should use `{{HEADER_NAV}}` placeholder:
 
 **CSS Classes (in themes/default/styles.css):**
 ```css
-.header-nav { }           /* Container for navigation */
-.header-nav .nav-name { } /* Station/device name link */
-.header-nav .nav-separator { } /* The ">" separator */
-.header-nav .nav-pipe { } /* The "|" between items */
-.header-nav .nav-item { } /* Navigation links */
-.header-nav .nav-item.active { } /* Current page (not a link) */
+.menu__inner li { }            /* Menu items */
+.menu__inner li.active a { }   /* Current page */
+.menu__inner li.separator { }  /* The "|" between items */
+.menu__inner a { }             /* Navigation links */
 ```
 
 **Consumers:**
 | Location | Method | Purpose |
 |----------|--------|---------|
-| `lib/cli/pure_station.dart` | `generateStationHeader()` | Station chat page |
-| `lib/services/collection_service.dart` | `generateDeviceHeader()` | Device chat page |
+| `lib/station.dart` | `generateStationMenuItems()` | Station chat/homepage |
+| `lib/cli/pure_station.dart` | `generateStationMenuItems()` | Station chat/homepage |
+| `lib/services/app_service.dart` | `generateDeviceMenuItems()` | Blog index, www homepage |
+
+---
+
+### StationHtmlTemplates
+
+**File:** `lib/util/station_html_templates.dart`
+
+Shared HTML builders for station and device pages. Pure Dart library (no Flutter deps). Eliminates duplication across station.dart, pure_station.dart, and service files.
+
+**Key Methods:**
+
+| Method | Purpose |
+|--------|---------|
+| `getBaseStyles()` | Returns Terminimal theme CSS |
+| `buildStationHomepage({...})` | Station homepage with device grid, map, API endpoints |
+| `buildAlertsPage({stationName, alerts})` | Alerts listing page with filter/search |
+| `buildBlogPostPage({...})` | Blog post page with optional NOSTR likes, comments |
+| `buildDownloadPage({...})` | Software download page |
+| `getNostrLikesScript({...})` | NOSTR NIP-07 likes JavaScript |
+
+**Usage:**
+```dart
+import 'util/station_html_templates.dart';
+
+final html = StationHtmlTemplates.buildBlogPostPage(
+  postTitle: post.title,
+  postDate: post.displayDate,
+  author: author,
+  htmlContent: htmlContent,
+  globalStyles: StationHtmlTemplates.getBaseStyles(),
+);
+```
+
+**Consumers:**
+| Location | Methods Used |
+|----------|-------------|
+| `lib/station.dart` | `buildStationHomepage`, `buildAlertsPage`, `buildBlogPostPage` |
+| `lib/cli/pure_station.dart` | `buildStationHomepage`, `buildAlertsPage`, `buildBlogPostPage` |
+| `lib/services/station_server_service.dart` | `buildBlogPostPage`, `buildDownloadPage` |
+| `lib/services/websocket_service.dart` | `buildBlogPostPage` |
+| `lib/services/log_api_service.dart` | `buildBlogPostPage` |
 
 ---
 
@@ -4247,6 +4214,7 @@ ListView.builder(
 | PathRecordingService | tracker/services/ | Service | GPS path recording (uses LocationProviderService) |
 | PlaceService.findPlacesWithinRadius | services/ | Service | Find places within GPS radius |
 | WebNavigation | util/ | Web Theme | Dynamic navigation menu generator (shared) |
+| StationHtmlTemplates | util/ | Web Theme | Shared HTML builders for station/device pages |
 | getChatPageScripts | util/ | Web Theme | Reusable chat page JavaScript (shared) |
 | QrShareReceiveWidget | widgets/ | QR | Share/receive data via QR |
 | TranscribeButtonWidget | widgets/ | Input | Voice-to-text for text fields |
