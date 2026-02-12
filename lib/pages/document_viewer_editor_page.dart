@@ -102,6 +102,14 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
   // Active line number (0-indexed) for gutter highlight
   int? _activeLine;
 
+  // Find-in-file state
+  bool _showFindBar = false;
+  final _findController = TextEditingController();
+  final _findFocusNode = FocusNode();
+  final _keyFocusNode = FocusNode();
+  List<int> _findOffsets = [];   // start offsets of each match
+  int _findCurrent = -1;         // index into _findOffsets
+
   // Scroll controllers for syncing editor line-number gutter
   final _editScrollController = ScrollController();
   final _gutterScrollController = ScrollController();
@@ -211,6 +219,10 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
       _isEditing = false;
       _hasUnsavedChanges = false;
       _activeLine = null;
+      _showFindBar = false;
+      _findController.clear();
+      _findOffsets = [];
+      _findCurrent = -1;
       _editController.removeListener(_scheduleGutterUpdate);
       _editController.dispose();
       _editController = _createController();
@@ -231,6 +243,9 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
     _editController.removeListener(_scheduleGutterUpdate);
     _editController.dispose();
     _gutterState.dispose();
+    _findController.dispose();
+    _findFocusNode.dispose();
+    _keyFocusNode.dispose();
     super.dispose();
   }
 
@@ -453,6 +468,24 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
     }
   }
 
+  /// Save edited content to disk without leaving edit mode (for Ctrl+S).
+  Future<void> _saveInPlace() async {
+    try {
+      await File(widget.filePath).writeAsString(_editController.text);
+      setState(() {
+        _textContent = _editController.text;
+        _hasUnsavedChanges = false;
+      });
+      widget.onSaved?.call();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to save: $e')),
+        );
+      }
+    }
+  }
+
   /// Cancel editing (prompts if there are unsaved changes).
   Future<void> cancelEditing() async {
     if (_hasUnsavedChanges) {
@@ -481,6 +514,102 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
     });
   }
 
+  // -- Keyboard shortcut handler --
+
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final isCtrl = HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isMetaPressed;
+    if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyS && _isEditing) {
+      if (_hasUnsavedChanges) _saveInPlace();
+      return KeyEventResult.handled;
+    }
+    if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyF) {
+      _toggleFindBar();
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.escape && _showFindBar) {
+      _closeFindBar();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  // -- Find-in-file logic --
+
+  void _toggleFindBar() {
+    setState(() => _showFindBar = true);
+    // Delay focus request to after the build
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _findFocusNode.requestFocus();
+    });
+  }
+
+  void _closeFindBar() {
+    setState(() {
+      _showFindBar = false;
+      _findController.clear();
+      _findOffsets = [];
+      _findCurrent = -1;
+    });
+  }
+
+  void _onFindChanged(String query) {
+    if (query.isEmpty) {
+      setState(() {
+        _findOffsets = [];
+        _findCurrent = -1;
+      });
+      return;
+    }
+
+    final text = _isEditing ? _editController.text : (_textContent ?? '');
+    final lowerQuery = query.toLowerCase();
+    final lowerText = text.toLowerCase();
+    final offsets = <int>[];
+    var start = 0;
+    while (true) {
+      final idx = lowerText.indexOf(lowerQuery, start);
+      if (idx == -1) break;
+      offsets.add(idx);
+      start = idx + 1;
+    }
+
+    setState(() {
+      _findOffsets = offsets;
+      _findCurrent = offsets.isEmpty ? -1 : 0;
+    });
+
+    if (_isEditing && offsets.isNotEmpty) {
+      _selectEditMatch(0);
+    }
+  }
+
+  void _findNext() {
+    if (_findOffsets.isEmpty) return;
+    setState(() {
+      _findCurrent = (_findCurrent + 1) % _findOffsets.length;
+    });
+    if (_isEditing) _selectEditMatch(_findCurrent);
+  }
+
+  void _findPrev() {
+    if (_findOffsets.isEmpty) return;
+    setState(() {
+      _findCurrent = (_findCurrent - 1 + _findOffsets.length) % _findOffsets.length;
+    });
+    if (_isEditing) _selectEditMatch(_findCurrent);
+  }
+
+  void _selectEditMatch(int matchIndex) {
+    final offset = _findOffsets[matchIndex];
+    final len = _findController.text.length;
+    _editController.selection = TextSelection(
+      baseOffset: offset,
+      extentOffset: offset + len,
+    );
+  }
+
   Widget _buildEditToolbar() {
     final theme = Theme.of(context);
 
@@ -497,6 +626,11 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
           children: [
             Text('Editing', style: theme.textTheme.labelLarge),
             const Spacer(),
+            IconButton(
+              icon: const Icon(Icons.search, size: 20),
+              tooltip: 'Find (Ctrl+F)',
+              onPressed: _toggleFindBar,
+            ),
             TextButton(
               onPressed: cancelEditing,
               child: const Text('Cancel'),
@@ -523,6 +657,11 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
       child: Row(
         children: [
           const Spacer(),
+          IconButton(
+            icon: const Icon(Icons.search, size: 20),
+            tooltip: 'Find (Ctrl+F)',
+            onPressed: _toggleFindBar,
+          ),
           IconButton(
             icon: const Icon(Icons.edit, size: 20),
             tooltip: 'Edit',
@@ -597,6 +736,71 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
     );
   }
 
+  Widget _buildFindBar() {
+    return Positioned(
+      top: 8,
+      right: 16,
+      child: Material(
+        elevation: 4,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          width: 300,
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _findController,
+                  focusNode: _findFocusNode,
+                  decoration: const InputDecoration(
+                    hintText: 'Find...',
+                    isDense: true,
+                    border: InputBorder.none,
+                  ),
+                  onChanged: _onFindChanged,
+                  onSubmitted: (_) => _findNext(),
+                ),
+              ),
+              Text(
+                '${_findOffsets.isEmpty ? 0 : _findCurrent + 1}/${_findOffsets.length}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              IconButton(
+                icon: const Icon(Icons.arrow_upward, size: 18),
+                onPressed: _findPrev,
+                visualDensity: VisualDensity.compact,
+              ),
+              IconButton(
+                icon: const Icon(Icons.arrow_downward, size: 18),
+                onPressed: _findNext,
+                visualDensity: VisualDensity.compact,
+              ),
+              IconButton(
+                icon: const Icon(Icons.close, size: 18),
+                onPressed: _closeFindBar,
+                visualDensity: VisualDensity.compact,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _wrapWithKeyboardAndFind(Widget content) {
+    return Focus(
+      focusNode: _keyFocusNode,
+      autofocus: true,
+      onKeyEvent: _handleKeyEvent,
+      child: Stack(
+        children: [
+          content,
+          if (_showFindBar) _buildFindBar(),
+        ],
+      ),
+    );
+  }
+
   Widget _buildBody() {
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator());
@@ -636,27 +840,27 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
     if (widget.editable && isEditableType) {
       if (_isEditing) {
         // Always show the save/cancel toolbar when editing
-        return Column(
+        return _wrapWithKeyboardAndFind(Column(
           children: [
             _buildEditToolbar(),
             _buildEditor(),
           ],
-        );
+        ));
       }
       if (widget.showEditToolbar) {
         // Show the built-in edit button toolbar
-        return Column(
+        return _wrapWithKeyboardAndFind(Column(
           children: [
             _buildEditToolbar(),
             Expanded(child: _buildViewer()),
           ],
-        );
+        ));
       }
       // Editable but toolbar managed externally — just show viewer
-      return _buildViewer();
+      return _wrapWithKeyboardAndFind(_buildViewer());
     }
 
-    return _buildViewer();
+    return _wrapWithKeyboardAndFind(_buildViewer());
   }
 
   Widget _buildViewer() {
@@ -792,6 +996,32 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
     );
   }
 
+  /// Build text spans with find-match highlights applied.
+  List<InlineSpan> _buildFindHighlightSpans(String text, TextStyle? baseStyle) {
+    final spans = <InlineSpan>[];
+    final queryLen = _findController.text.length;
+    var pos = 0;
+    for (var i = 0; i < _findOffsets.length; i++) {
+      final matchStart = _findOffsets[i];
+      if (matchStart > pos) {
+        spans.add(TextSpan(text: text.substring(pos, matchStart)));
+      }
+      final isCurrent = i == _findCurrent;
+      spans.add(TextSpan(
+        text: text.substring(matchStart, matchStart + queryLen),
+        style: TextStyle(
+          backgroundColor: isCurrent ? Colors.orange : Colors.yellow.withValues(alpha: 0.6),
+          color: Colors.black,
+        ),
+      ));
+      pos = matchStart + queryLen;
+    }
+    if (pos < text.length) {
+      spans.add(TextSpan(text: text.substring(pos)));
+    }
+    return spans;
+  }
+
   /// Build text viewer with optional syntax highlighting and line numbers.
   Widget _buildTextViewer() {
     final appTheme = Theme.of(context);
@@ -841,9 +1071,19 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
       );
     }
 
+    // Apply find highlights to a plain text widget
+    Widget applyFindHighlight(String text, TextStyle? style) {
+      if (!_showFindBar || _findOffsets.isEmpty) {
+        return SelectableText(text, style: style);
+      }
+      return SelectableText.rich(
+        TextSpan(style: style, children: _buildFindHighlightSpans(text, style)),
+      );
+    }
+
     // No highlighting for plain text or oversized files
     if (_languageId == null || content.length > 100 * 1024) {
-      return wrapWithGutter(SelectableText(content, style: monoStyle));
+      return wrapWithGutter(applyFindHighlight(content, monoStyle));
     }
 
     // Parse and highlight
@@ -851,7 +1091,7 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
       final result = highlight.parse(content, languageId: _languageId!);
       final nodes = result.nodes;
       if (nodes == null || nodes.isEmpty) {
-        return wrapWithGutter(SelectableText(content, style: monoStyle));
+        return wrapWithGutter(applyFindHighlight(content, monoStyle));
       }
 
       final hlTheme = appTheme.brightness == Brightness.dark
@@ -870,7 +1110,7 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
       );
     } catch (_) {
       // Fallback to plain text on parse error
-      return wrapWithGutter(SelectableText(content, style: monoStyle));
+      return wrapWithGutter(applyFindHighlight(content, monoStyle));
     }
   }
 }
