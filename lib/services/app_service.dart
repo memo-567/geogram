@@ -552,9 +552,8 @@ class AppService {
       final template = await themeService.getTemplate('blog');
       if (template == null) return;
 
-      // Get styles
-      final globalStyles = await themeService.getGlobalStyles() ?? '';
-      final appStyles = await themeService.getAppStyles('blog') ?? '';
+      // Get combined styles for external stylesheet
+      final combinedStyles = await themeService.getCombinedStyles('blog');
 
       // Get cache data
       final cache = await getBlogCacheOrRegenerate(blogAppPath);
@@ -590,21 +589,22 @@ class AppService {
       // Process template
       final html = themeService.processTemplate(template, {
         'TITLE': _currentCallsign ?? 'Blog',
-        'GLOBAL_STYLES': globalStyles,
-        'APP_STYLES': appStyles,
         'APP_NAME': _currentCallsign ?? 'Blog',
         'APP_DESCRIPTION': '${publishedPosts.length} post${publishedPosts.length != 1 ? 's' : ''}',
         'CONTENT': postsHtml.toString(),
         'DATA_JSON': jsonEncode({'posts': publishedPosts}),
       });
 
-      // Write index.html via ProfileStorage
+      // Write index.html + styles.css via ProfileStorage
       if (_profileStorage != null) {
         final appStorage = ScopedProfileStorage.fromAbsolutePath(_profileStorage!, blogAppPath);
         await appStorage.writeString('index.html', html);
+        await appStorage.writeString('styles.css', combinedStyles);
       } else {
         final indexFile = File('$blogAppPath/index.html');
         await indexFile.writeAsString(html);
+        final stylesFile = File('$blogAppPath/styles.css');
+        await stylesFile.writeAsString(combinedStyles);
       }
     } catch (e) {
       stderr.writeln('Error generating blog index: $e');
@@ -712,9 +712,8 @@ class AppService {
       final template = await themeService.getTemplate('chat');
       if (template == null) return;
 
-      // Get styles
-      final globalStyles = await themeService.getGlobalStyles() ?? '';
-      final appStyles = await themeService.getAppStyles('chat') ?? '';
+      // Get combined styles for external stylesheet
+      final combinedStyles = await themeService.getCombinedStyles('chat');
 
       // Get chat rooms
       final chatService = ChatService();
@@ -821,8 +820,6 @@ class AppService {
       // Process template
       final html = themeService.processTemplate(template, {
         'TITLE': _currentCallsign ?? 'Chat',
-        'GLOBAL_STYLES': globalStyles,
-        'APP_STYLES': appStyles,
         'APP_NAME': _currentCallsign ?? 'Chat',
         'APP_DESCRIPTION': '${channels.length} channel${channels.length != 1 ? 's' : ''}',
         'CONTENT': messagesHtml.toString(),
@@ -833,13 +830,16 @@ class AppService {
         'GENERATED_DATE': DateTime.now().toIso8601String().split('T').first,
       });
 
-      // Write index.html via ProfileStorage
+      // Write index.html + styles.css via ProfileStorage
       if (_profileStorage != null) {
         final appStorage = ScopedProfileStorage.fromAbsolutePath(_profileStorage!, chatAppPath);
         await appStorage.writeString('index.html', html);
+        await appStorage.writeString('styles.css', combinedStyles);
       } else {
         final indexFile = File('$chatAppPath/index.html');
         await indexFile.writeAsString(html);
+        final stylesFile = File('$chatAppPath/styles.css');
+        await stylesFile.writeAsString(combinedStyles);
       }
     } catch (e) {
       stderr.writeln('Error generating chat index: $e');
@@ -4560,9 +4560,8 @@ window.APP_DATA_FULL = $jsonData;
         return;
       }
 
-      // Get styles
-      final globalStyles = await themeService.getGlobalStyles() ?? '';
-      final appStyles = await themeService.getAppStyles('home') ?? '';
+      // Get combined styles for external stylesheet
+      final combinedStyles = await themeService.getCombinedStyles('home');
 
       // Aggregate data from apps
       final recentPosts = await _getRecentBlogPosts(targetCallsign, limit: 5);
@@ -4589,8 +4588,8 @@ window.APP_DATA_FULL = $jsonData;
         'TITLE': title ?? targetCallsign,
         'APP_NAME': title ?? targetCallsign,
         'APP_DESCRIPTION': description ?? 'Welcome to $targetCallsign',
-        'GLOBAL_STYLES': globalStyles,
-        'APP_STYLES': appStyles,
+        'COLLECTION_NAME': title ?? targetCallsign,
+        'COLLECTION_DESCRIPTION': description ?? 'Welcome to $targetCallsign',
         'RECENT_POSTS': recentPostsHtml,
         'UPCOMING_EVENTS': upcomingEventsHtml,
         'PLACES_COUNT': placesCount.toString(),
@@ -4601,9 +4600,11 @@ window.APP_DATA_FULL = $jsonData;
         'SCRIPTS': '',
       });
 
-      // Write to file
+      // Write index.html + styles.css
       final indexFile = File('${callsignDir.path}/index.html');
       await indexFile.writeAsString(html);
+      final stylesFile = File('${callsignDir.path}/styles.css');
+      await stylesFile.writeAsString(combinedStyles);
       stderr.writeln('Generated homepage: ${indexFile.path}');
     } catch (e) {
       stderr.writeln('Error generating homepage: $e');

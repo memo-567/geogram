@@ -8863,8 +8863,6 @@ ${WebNavigation.getHeaderNavCss()}
       // Process template with variable substitution
       final variables = {
         'TITLE': 'Chat - ${escapeHtml(stationName)}',
-        'GLOBAL_STYLES': globalStyles,
-        'APP_STYLES': appStyles,
         'COLLECTION_NAME': stationName,
         'COLLECTION_DESCRIPTION': '${rooms.length} room${rooms.length != 1 ? 's' : ''}',
         'CONTENT': messagesHtml.toString(),
