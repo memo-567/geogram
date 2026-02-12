@@ -200,7 +200,11 @@ Grab the latest release from the [releases page](https://github.com/geograms/geo
 
 **Android**: Download the APK and install it directly. No Play Store account needed, no approval process, no tracking. Works on any Android device.
 
-**Linux**: Download the AppImage and run it. No installation, no root access, no package manager. Just download, make executable, and launch.
+**Linux**: One command to install and launch — no root required:
+```
+curl -fsSL https://raw.githubusercontent.com/geograms/geogram/main/linux/scripts/get-geogram.sh | bash
+```
+This downloads the latest release, installs desktop integration (icons, app menu entry, autostart), and launches Geogram. To uninstall, run `~/.local/share/geogram/uninstall-desktop.sh`.
 
 **Other platforms**: Windows, macOS, iOS, and web builds are available but receive less testing. See [docs/technical.md](docs/technical.md) for build instructions if you want to compile from source.
 
