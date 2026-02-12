@@ -2041,9 +2041,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
   <div class="container">
     <header class="header">
       <nav class="header-nav">
-        <span class="active">home</span>
-        <span class="separator">|</span>
-        <a href="/download/">download</a>
+        <ul>${WebNavigation.generateStationMenuItems(activeApp: 'home', hasChat: false, hasDownload: true)}</ul>
       </nav>
       <div class="logo">${escapeHtml(stationName)}</div>
       <p class="subtitle">Geogram Relay Server</p>

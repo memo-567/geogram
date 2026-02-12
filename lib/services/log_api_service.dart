@@ -76,6 +76,7 @@ import '../transfer/services/p2p_transfer_service.dart';
 import '../pages/transfer_send_page.dart';
 import '../util/event_bus.dart';
 import '../util/station_html_templates.dart';
+import '../util/web_navigation.dart';
 
 class LogApiService {
   static final LogApiService _instance = LogApiService._internal();
@@ -11838,7 +11839,7 @@ class LogApiService {
       author: authorIdentifier,
       htmlContent: htmlContent,
       tags: post.tags,
-      menuItems: '<li><a href="../">home</a></li><li class="active"><a href="./">blog</a></li><li><a href="../chat/">chat</a></li>',
+      menuItems: WebNavigation.generateDeviceMenuItems(activeApp: 'blog', hasBlog: true),
       logoText: authorIdentifier,
       logoHref: '../',
       postId: post.id,
