@@ -12,8 +12,10 @@ APP_ID="geogram.radio"
 # XDG base directories
 # ---------------------------------------------------------------------------
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 ICON_BASE="$DATA_HOME/icons/hicolor"
 APP_DIR="$DATA_HOME/applications"
+AUTOSTART_DIR="$CONFIG_HOME/autostart"
 BIN_DIR="$HOME/.local/bin"
 
 # ---------------------------------------------------------------------------
@@ -31,6 +33,12 @@ echo "Icons removed."
 # ---------------------------------------------------------------------------
 rm -f "$APP_DIR/${APP_ID}.desktop"
 echo "Desktop entry removed."
+
+# ---------------------------------------------------------------------------
+# Remove autostart entry
+# ---------------------------------------------------------------------------
+rm -f "$AUTOSTART_DIR/${APP_ID}.desktop"
+echo "Autostart entry removed."
 
 # ---------------------------------------------------------------------------
 # Remove terminal symlink

@@ -29,8 +29,10 @@ fi
 # XDG base directories
 # ---------------------------------------------------------------------------
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 ICON_BASE="$DATA_HOME/icons/hicolor"
 APP_DIR="$DATA_HOME/applications"
+AUTOSTART_DIR="$CONFIG_HOME/autostart"
 BIN_DIR="$HOME/.local/bin"
 
 # ---------------------------------------------------------------------------
@@ -73,6 +75,22 @@ StartupWMClass=$APP_ID
 EOF
 
 echo "Desktop entry installed: $APP_DIR/${APP_ID}.desktop"
+
+# ---------------------------------------------------------------------------
+# Enable autostart on login
+# ---------------------------------------------------------------------------
+mkdir -p "$AUTOSTART_DIR"
+cat > "$AUTOSTART_DIR/${APP_ID}.desktop" << EOF
+[Desktop Entry]
+Type=Application
+Name=$APP_NAME
+Exec=$BUNDLE_DIR/geogram
+Icon=$APP_ID
+X-GNOME-Autostart-enabled=true
+StartupWMClass=$APP_ID
+EOF
+
+echo "Autostart enabled: $AUTOSTART_DIR/${APP_ID}.desktop"
 
 # ---------------------------------------------------------------------------
 # Create symlink in ~/.local/bin for terminal access
