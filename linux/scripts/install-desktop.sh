@@ -84,7 +84,7 @@ cat > "$AUTOSTART_DIR/${APP_ID}.desktop" << EOF
 [Desktop Entry]
 Type=Application
 Name=$APP_NAME
-Exec=$BUNDLE_DIR/geogram
+Exec=$BUNDLE_DIR/geogram --minimized
 Icon=$APP_ID
 X-GNOME-Autostart-enabled=true
 StartupWMClass=$APP_ID

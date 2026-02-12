@@ -23,6 +23,7 @@ Options:
   --scan-localhost=RANGE     Scan localhost ports for other instances (e.g., 5000-6000)
   --internet-only            Disable local network and BLE, use station proxy only
   --no-update                Disable automatic update checks on startup
+  --minimized                Start hidden to system tray (or minimized on Windows)
   --verbose                  Enable verbose logging
   --email-dns[=DOMAIN]       Run email DNS diagnostics and exit (auto-detects domain)
   --help, -h                 Show help message
@@ -296,6 +297,25 @@ geogram_desktop --new-identity --skip-intro --http-api --no-update
 - Running multiple test instances that don't need update notifications
 - Offline environments where update checks would timeout
 - Development and debugging sessions
+
+### --minimized
+
+Start hidden to the system tray on Linux or minimized to the taskbar on Windows. Primarily used by autostart entries so the app doesn't pop up a visible window at login.
+
+```bash
+# Start hidden to system tray
+geogram_desktop --minimized
+```
+
+**Behavior by platform:**
+- **Linux** (tray supported): Window is never shown. The app hides to the system tray immediately after initialization. Click the tray icon to restore the window.
+- **Windows** (no tray yet): Window shows minimized to the taskbar.
+
+**Note:** This flag bypasses the "Minimize to Tray" user setting since it's an explicit CLI directive from the autostart entry.
+
+**Used automatically by:**
+- Linux XDG autostart desktop entry (installed by `install-desktop.sh`)
+- Windows registry Run key (installed by the Inno Setup installer)
 
 ### --verbose
 

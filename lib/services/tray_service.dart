@@ -220,6 +220,22 @@ class TrayService {
     }
   }
 
+  /// Hide the window to the system tray unconditionally.
+  /// Unlike [hideToTray], this bypasses the user's "Minimize to Tray" setting.
+  /// Used by the --minimized CLI flag which is an explicit directive from autostart.
+  Future<void> hideToTrayDirect() async {
+    if (!_initialized || !isSupported) return;
+
+    try {
+      await windowManager.setSkipTaskbar(true);
+      await windowManager.hide();
+      _windowHidden = true;
+      LogService().log('TrayService: Window hidden to tray (direct)');
+    } catch (e) {
+      LogService().log('TrayService: Error hiding to tray (direct): $e');
+    }
+  }
+
   /// Restore the window from the system tray
   Future<void> restoreFromTray() async {
     if (!_initialized || !isSupported) return;

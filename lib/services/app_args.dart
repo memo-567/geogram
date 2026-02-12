@@ -26,6 +26,7 @@ import 'package:flutter/services.dart';
 ///   --scan-localhost=RANGE     Scan localhost ports for other instances (e.g., 5000-6000)
 ///   --internet-only            Disable local network and Bluetooth scanning (station proxy only)
 ///   --no-update                Disable automatic update checks on startup
+///   --minimized                Start hidden to system tray (or minimized on Windows)
 ///   --help, -h                 Show help and exit
 ///   --version, -v              Show version and exit
 ///   --verbose                  Enable verbose logging
@@ -63,6 +64,7 @@ class AppArgs {
   String? _scanLocalhostRange; // e.g., "5000-6000" for scanning localhost ports
   bool _internetOnly = false; // Disable local network and BLE, use station proxy only
   bool _noUpdate = false; // Disable automatic update checks on startup
+  bool _minimized = false; // Start hidden to system tray or minimized on Windows
   bool _testMode = false; // Test mode: enables debug API, http API, skips intro
   bool _showHelp = false;
   bool _showVersion = false;
@@ -113,6 +115,9 @@ class AppArgs {
 
   /// Whether automatic update checks are disabled
   bool get noUpdate => _noUpdate;
+
+  /// Whether to start hidden to system tray (Linux) or minimized to taskbar (Windows)
+  bool get minimized => _minimized;
 
   /// Whether test mode is enabled (auto-enables debug API, http API, skips intro)
   bool get testMode => _testMode;
@@ -338,6 +343,11 @@ class AppArgs {
         continue;
       }
 
+      if (arg == '--minimized') {
+        _minimized = true;
+        continue;
+      }
+
       if (arg == '--test-mode') {
         _testMode = true;
         // Test mode implies: debug API, http API, skip intro, new identity
@@ -381,6 +391,7 @@ class AppArgs {
     _scanLocalhostRange = null;
     _internetOnly = false;
     _noUpdate = false;
+    _minimized = false;
     _testMode = false;
     _showHelp = false;
     _showVersion = false;
@@ -409,6 +420,7 @@ Options:
   --scan-localhost=RANGE     Scan localhost ports for other instances (e.g., 5000-6000)
   --internet-only            Disable local network and BLE scanning (station proxy only)
   --no-update                Disable automatic update checks on startup
+  --minimized                Start hidden to system tray (or minimized on Windows)
   --verbose                  Enable verbose logging
   --help, -h                 Show this help message
   --version, -v              Show version information
@@ -458,6 +470,7 @@ Examples:
       'scanLocalhostRange': _scanLocalhostRange,
       'internetOnly': _internetOnly,
       'noUpdate': _noUpdate,
+      'minimized': _minimized,
       'verbose': _verbose,
       'initialized': _initialized,
     };
@@ -465,6 +478,6 @@ Examples:
 
   @override
   String toString() {
-    return 'AppArgs(port: $_port, dataDir: $_dataDir, cliMode: $_cliMode, httpApi: $_httpApi, debugApi: $_debugApi, newIdentity: $_newIdentity, identityType: $_identityType, nickname: $_nickname, skipIntro: $_skipIntro, scanLocalhostRange: $_scanLocalhostRange, internetOnly: $_internetOnly, noUpdate: $_noUpdate, verbose: $_verbose)';
+    return 'AppArgs(port: $_port, dataDir: $_dataDir, cliMode: $_cliMode, httpApi: $_httpApi, debugApi: $_debugApi, newIdentity: $_newIdentity, identityType: $_identityType, nickname: $_nickname, skipIntro: $_skipIntro, scanLocalhostRange: $_scanLocalhostRange, internetOnly: $_internetOnly, noUpdate: $_noUpdate, minimized: $_minimized, verbose: $_verbose)';
   }
 }

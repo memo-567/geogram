@@ -86,7 +86,7 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
-  ValueName: "{#MyAppName}"; ValueType: string; ValueData: """{app}\{#MyAppExeName}"""; \
+  ValueName: "{#MyAppName}"; ValueType: string; ValueData: """{app}\{#MyAppExeName}"" --minimized"; \
   Flags: uninsdeletevalue; Components: shortcuts
 
 [Run]

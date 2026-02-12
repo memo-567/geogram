@@ -279,8 +279,10 @@ void main() async {
             await windowManager.maximize();
           }
 
-          await windowManager.show();
-          await windowManager.focus();
+          if (!AppArgs().minimized) {
+            await windowManager.show();
+            await windowManager.focus();
+          }
 
           // Start listening for window changes to persist state
           await windowStateService.startListening();
@@ -298,8 +300,10 @@ void main() async {
               // Set size constraints even in fallback mode
               await windowManager.setMinimumSize(const Size(800, 600));
               await windowManager.setMaximumSize(const Size(3840, 2160));
-              await windowManager.show();
-              await windowManager.focus();
+              if (!AppArgs().minimized) {
+                await windowManager.show();
+                await windowManager.focus();
+              }
             },
           );
         } catch (_) {}
@@ -386,6 +390,19 @@ void main() async {
 
     await TrayService().initialize();
     LogService().log('TrayService initialized');
+
+    // Handle --minimized startup: hide to tray or minimize to taskbar
+    if (AppArgs().minimized) {
+      if (TrayService().isSupported) {
+        await TrayService().hideToTrayDirect();
+        LogService().log('Started minimized to system tray');
+      } else {
+        // Windows: show then minimize to taskbar
+        await windowManager.show();
+        await windowManager.minimize();
+        LogService().log('Started minimized to taskbar');
+      }
+    }
   } catch (e, stackTrace) {
     LogService().log('ERROR during critical initialization: $e');
     LogService().log('Stack trace: $stackTrace');
