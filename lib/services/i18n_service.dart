@@ -41,6 +41,7 @@ class I18nService {
     'work',
     'stories',
     'qr',
+    'music',
   ];
 
   // Notifier for UI updates when language changes

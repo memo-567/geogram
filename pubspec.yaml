@@ -79,6 +79,7 @@ dependencies:
   flutter_onnxruntime: ^1.6.1    # ONNX Runtime for offline music generation
   unorm_dart: ^0.3.2             # Unicode normalization for MusicGen tokenizer
   pdfx: ^2.6.0                   # Native PDF rendering for document viewer
+  audio_service: ^0.18.15         # System media session (Android notification, Linux MPRIS)
   media_kit: ^1.2.6              # Cross-platform video/audio player (replaces video_player + fvp)
   media_kit_video: ^2.0.1        # Video rendering widget for media_kit
   media_kit_libs_video: ^1.0.7   # Bundled native video libraries for all platforms
