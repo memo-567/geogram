@@ -84,6 +84,11 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Components: sho
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"; Components: shortcuts
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
+[Registry]
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
+  ValueName: "{#MyAppName}"; ValueType: string; ValueData: """{app}\{#MyAppExeName}"""; \
+  Flags: uninsdeletevalue; Components: shortcuts
+
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; \
   Flags: nowait postinstall skipifsilent
