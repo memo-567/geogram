@@ -53,12 +53,12 @@
  */
 
 import 'dart:convert';
-import 'dart:io';
-import 'dart:typed_data';
 
-import 'package:sqlite3/sqlite3.dart' as sqlite;
-
-import '../util/backup_encryption.dart';
+// TODO: Re-enable when ECIES encryption is properly implemented
+// import 'dart:io';
+// import 'dart:typed_data';
+// import 'package:sqlite3/sqlite3.dart' as sqlite;
+// import '../util/backup_encryption.dart';
 import '../util/email_format.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
@@ -66,7 +66,8 @@ import 'log_service.dart';
 import 'nip05_registry_service.dart';
 import 'smtp_client.dart' show SMTPClient, DkimConfig, SMTPRelayConfig;
 import 'smtp_server.dart' show MIMEParser;
-import 'storage_config.dart';
+// TODO: Re-enable when ECIES encryption is properly implemented
+// import 'storage_config.dart';
 
 /// Callback type for sending messages to clients
 typedef SendToClientCallback = bool Function(String clientId, String message);
@@ -208,7 +209,8 @@ class EmailRelayService {
   final Map<String, String> _outgoingSubjects = {};
 
   /// Maximum cache size per recipient (10 MB)
-  static const int _maxCacheSizeBytes = 10 * 1024 * 1024;
+  // TODO: Re-enable when ECIES encryption is properly implemented
+  // static const int _maxCacheSizeBytes = 10 * 1024 * 1024;
 
   /// Email relay settings
   EmailRelaySettings settings = EmailRelaySettings();
@@ -560,78 +562,20 @@ class EmailRelayService {
 
   // ============================================================
   // Encrypted Email Cache (for offline recipients)
+  // TODO: Re-enable when ECIES encryption is properly implemented
   // ============================================================
 
-  String _getCachePath(String callsign) {
-    return '${StorageConfig().emailCacheDir}/${callsign.toUpperCase()}.db';
-  }
+  // String _getCachePath(String callsign) {
+  //   return '${StorageConfig().emailCacheDir}/${callsign.toUpperCase()}.db';
+  // }
 
-  /// Cache an email for an offline recipient (encrypted with their npub)
-  Future<bool> cacheEmailForRecipient({
-    required String recipientCallsign,
-    required String recipientNpub,
-    required Map<String, dynamic> emailMessage,
-  }) async {
-    final cachePath = _getCachePath(recipientCallsign);
+  // Future<bool> cacheEmailForRecipient({
+  //   required String recipientCallsign,
+  //   required String recipientNpub,
+  //   required Map<String, dynamic> emailMessage,
+  // }) async { ... }
 
-    // Check size limit
-    final cacheFile = File(cachePath);
-    if (await cacheFile.exists() && (await cacheFile.stat()).size >= _maxCacheSizeBytes) {
-      LogService().log('Email cache full for $recipientCallsign (10 MB limit)');
-      return false;
-    }
-
-    // Encrypt the email content with recipient's npub (ECIES)
-    final jsonBytes = Uint8List.fromList(utf8.encode(jsonEncode(emailMessage)));
-    final encrypted = BackupEncryption.encryptFile(jsonBytes, recipientNpub);
-
-    // Open/create SQLite database
-    await Directory(StorageConfig().emailCacheDir).create(recursive: true);
-    final db = sqlite.sqlite3.open(cachePath);
-    try {
-      db.execute('''
-        CREATE TABLE IF NOT EXISTS cached_emails (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          encrypted_content BLOB NOT NULL,
-          created_at INTEGER NOT NULL
-        )
-      ''');
-      db.execute(
-        'INSERT INTO cached_emails (encrypted_content, created_at) VALUES (?, ?)',
-        [encrypted, DateTime.now().millisecondsSinceEpoch],
-      );
-      LogService().log('Cached encrypted email for offline recipient $recipientCallsign');
-      return true;
-    } finally {
-      db.dispose();
-    }
-  }
-
-  /// Retrieve all cached encrypted emails for a recipient, then clear the cache
-  Future<List<Uint8List>> retrieveAndClearCache(String recipientCallsign) async {
-    final cachePath = _getCachePath(recipientCallsign);
-    if (!await File(cachePath).exists()) return [];
-
-    final db = sqlite.sqlite3.open(cachePath);
-    final blobs = <Uint8List>[];
-    try {
-      final results = db.select(
-        'SELECT encrypted_content FROM cached_emails ORDER BY created_at',
-      );
-      for (final row in results) {
-        blobs.add(row['encrypted_content'] as Uint8List);
-      }
-    } finally {
-      db.dispose();
-    }
-
-    // Delete the cache file after retrieval
-    if (blobs.isNotEmpty) {
-      await File(cachePath).delete();
-      LogService().log('Delivered ${blobs.length} cached email(s) to $recipientCallsign');
-    }
-    return blobs;
-  }
+  // Future<List<Uint8List>> retrieveAndClearCache(String recipientCallsign) async { ... }
 
   // ============================================================
   // Incoming Email Handling (SMTP -> WebSocket)
